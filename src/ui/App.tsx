@@ -1,4 +1,5 @@
 import { Settings } from './Settings';
+import { ManifestStatus } from './ManifestStatus';
 
 export function App() {
   return (
@@ -6,6 +7,7 @@ export function App() {
       <h1>d2-loadoutGPT</h1>
       <p>Sign in with Bungie to start building loadouts.</p>
       <Settings />
+      <ManifestStatus />
     </main>
   );
 }
