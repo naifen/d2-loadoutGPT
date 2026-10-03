@@ -73,10 +73,12 @@ const errorMessage = (body: unknown): string | undefined => {
 };
 
 const looksLikeToolsUnsupported = (message: string) => /tool|function call/i.test(message);
+const redactApiKey = (message: string, apiKey: string) =>
+  apiKey ? message.replaceAll(apiKey, '[REDACTED]') : message;
 
-export function classify(status: number, headers: Headers, bodyText: string): LlmError {
-  const message = errorMessage(tryParse(bodyText)) ?? bodyText.slice(0, BODY_EXCERPT) ?? '';
-  const detail = message || `HTTP ${status}`;
+export function classify(status: number, headers: Headers, bodyText: string, apiKey: string): LlmError {
+  const message = redactApiKey(errorMessage(tryParse(bodyText)) ?? bodyText, apiKey);
+  const detail = message.slice(0, BODY_EXCERPT) || `HTTP ${status}`;
   if (status === 401 || status === 403) {
     return new LlmError('auth', `Endpoint rejected the API key (HTTP ${status}): ${detail}`);
   }
@@ -101,9 +103,9 @@ export function classify(status: number, headers: Headers, bodyText: string): Ll
 }
 
 /** Mid-stream `data: {"error": ...}` events (OpenRouter) get the same mapping. */
-function classifyStreamError(error: unknown): LlmError {
+function classifyStreamError(error: unknown, apiKey: string): LlmError {
   const code = isRecord(error) && typeof error.code === 'number' ? error.code : undefined;
-  const detail = errorMessage(error) ?? JSON.stringify(error);
+  const detail = redactApiKey(errorMessage(error) ?? JSON.stringify(error), apiKey);
   if (code === 401 || code === 403) return new LlmError('auth', `Endpoint rejected the API key: ${detail}`);
   if (code === 429) return new LlmError('rate-limit', `Rate limited by the endpoint: ${detail}`);
   if (typeof code === 'number' && code >= 400 && code < 500 && looksLikeToolsUnsupported(detail)) {
@@ -204,8 +206,8 @@ export function createOpenAITransport(settings: LlmEndpointSettings, signal?: Ab
         if (signal?.aborted) throw signal.reason;
         if (controller.signal.reason instanceof LlmError) throw controller.signal.reason;
         throw controller.signal.aborted
-          ? new LlmError('network', `No response from ${url} for ${IDLE_TIMEOUT_MS / 1000}s — gave up waiting.`)
-          : new LlmError('network', `Cannot reach the LLM endpoint at ${url} — check the base URL and that the server is running. (${(e as Error).message})`);
+          ? new LlmError('network', redactApiKey(`No response from ${url} for ${IDLE_TIMEOUT_MS / 1000}s — gave up waiting.`, settings.apiKey))
+          : new LlmError('network', redactApiKey(`Cannot reach the LLM endpoint at ${url} — check the base URL and that the server is running. (${(e as Error).message})`, settings.apiKey));
       }
 
       if (!res.ok) {
@@ -220,7 +222,7 @@ export function createOpenAITransport(settings: LlmEndpointSettings, signal?: Ab
             await reader?.cancel().catch(() => {});
             reader?.releaseLock();
           }
-          throw classify(res.status, res.headers, detail);
+          throw classify(res.status, res.headers, detail, settings.apiKey);
         } finally {
           cleanup();
         }
@@ -236,7 +238,7 @@ export function createOpenAITransport(settings: LlmEndpointSettings, signal?: Ab
       let finishReason: string | null | undefined;
       try {
         for await (const raw of sseEvents(res.body, poke)) {
-          if (raw.error) throw classifyStreamError(raw.error);
+          if (raw.error) throw classifyStreamError(raw.error, settings.apiKey);
           if (raw.choices === undefined) continue;
           if (!Array.isArray(raw.choices)) throw new LlmError('http', 'Invalid SSE choices.');
           const choices: unknown[] = raw.choices;
@@ -282,7 +284,7 @@ export function createOpenAITransport(settings: LlmEndpointSettings, signal?: Ab
       }
       if (finishReason !== 'stop' && finishReason !== 'tool_calls') {
         throw new LlmError('http', finishReason
-          ? `The endpoint could not complete the response (${finishReason}).`
+          ? `The endpoint could not complete the response (${redactApiKey(finishReason, settings.apiKey)}).`
           : 'The endpoint closed the stream before completing the response. Please retry.');
       }
 

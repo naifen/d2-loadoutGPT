@@ -5,6 +5,7 @@ import type { BungieTokens } from '../bungie/auth';
 import { bungieFetch } from '../bungie/http';
 import type { LlmEndpointSettings } from '../llm/openai';
 import { DEFAULT_LLM_SETTINGS, getLlmSettings, saveLlmSettings } from '../storage/llmSettings';
+import type { LlmSettings } from '../storage/llmSettings';
 
 interface Memberships {
   bungieNetUser: { uniqueName: string };
@@ -15,7 +16,7 @@ export function Settings() {
   const [name, setName] = useState<string>();
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
-  const [llm, setLlm] = useState<LlmEndpointSettings>(DEFAULT_LLM_SETTINGS);
+  const [llm, setLlm] = useState<LlmSettings>(DEFAULT_LLM_SETTINGS);
   const [llmSaved, setLlmSaved] = useState(false);
   const generation = useRef(0);
 
@@ -75,8 +76,21 @@ export function Settings() {
     }
   }
 
-  const setLlmField = (field: keyof LlmEndpointSettings) => (e: Event) =>
-    setLlm({ ...llm, [field]: (e.currentTarget as HTMLInputElement).value });
+  const setLlmField = (field: keyof LlmEndpointSettings) => (e: Event) => {
+    const value = (e.currentTarget as HTMLInputElement).value;
+    setLlm((current) => {
+      let apiKey = current.apiKey;
+      if (field === 'baseUrl') {
+        try {
+          if (new URL(value).origin !== new URL(current.baseUrl).origin) apiKey = '';
+        } catch {
+          apiKey = '';
+        }
+      }
+      return { ...current, apiKey, [field]: value };
+    });
+    setLlmSaved(false);
+  };
 
   return (
     <section>
@@ -97,8 +111,9 @@ export function Settings() {
 
       <h2>LLM endpoint</h2>
       <p>
-        Any OpenAI-compatible chat endpoint with tool calling. The key is stored in this
-        browser and sent only to the base URL below.
+        Any OpenAI-compatible chat endpoint with tool calling. By default, the key stays
+        in memory until the browser restarts or the extension reloads, and is sent only to the
+        configured endpoint. Changing the endpoint origin clears the key.
       </p>
       <p>
         <label>
@@ -122,6 +137,24 @@ export function Settings() {
             size={32}
           />
         </label>
+      </p>
+      <p>
+        <label>
+          <input
+            type="checkbox"
+            checked={llm.rememberKey}
+            onChange={(e) => {
+              setLlm({ ...llm, rememberKey: e.currentTarget.checked });
+              setLlmSaved(false);
+            }}
+            aria-describedby="remember-key-warning"
+          />{' '}
+          Remember key on this device
+        </label>
+        <br />
+        <small id="remember-key-warning">
+          Optional: saves the key unencrypted in your browser profile. Use only on a trusted device.
+        </small>
       </p>
       <p>
         <label>

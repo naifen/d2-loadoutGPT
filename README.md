@@ -73,8 +73,8 @@ history from an unowned or signed-out session is not restored.
 ## LLM settings
 
 The assistant talks to any **OpenAI-compatible chat-completions endpoint** that supports
-tool calling and SSE streaming. Configure it in the Settings panel (persisted in extension
-local storage; the API key is sent only to the configured base URL — nowhere else):
+tool calling and SSE streaming. Configure it in the Settings panel. The base URL and model
+persist in extension local storage; the API key is sent only to the configured endpoint.
 
 | Provider   | Base URL                          | Notes                                          |
 | ---------- | --------------------------------- | ---------------------------------------------- |
@@ -87,6 +87,19 @@ The model must support **function/tool calling** — the assistant drives vault 
 subclass/artifact lookups through tools, and the panel shows a distinct error when the
 endpoint or model can't. Chat history lives in session storage and clears on browser
 close; "New conversation" clears it on demand.
+
+API keys use **in-memory session storage by default**: closing and reopening the panel
+keeps the key, but restarting the browser or reloading/updating the extension clears it.
+**Remember key on this device** is an explicit, unchecked-by-default option that saves the
+key **unencrypted in your browser profile** across restarts. Use it only on a trusted
+device, preferably with a dedicated, restricted provider key. Uncheck it and save to
+remove the key from local storage while retaining it for the current browser session.
+
+On first use after updating from an earlier build, a previously persisted key moves to
+session storage and is removed from local storage; remembering is not silently enabled.
+Changing the endpoint origin (scheme, hostname, or effective port), or entering an invalid
+URL, clears the key in the form. Enter the new endpoint's key before saving. Provider HTTP
+and SSE errors redact the configured key before being shown.
 
 Remote endpoints must use **HTTPS**; HTTP is allowed for loopback addresses only
 (`localhost`, `127.0.0.1`, or `[::1]`). Base URLs cannot contain embedded credentials,
@@ -149,6 +162,10 @@ Run this in **both** browsers: `pnpm build` → `.output/chrome-mv3`,
 - [ ] Log out during a pending turn/refresh; account data disappears and late completions cannot restore it.
 - [ ] Start **New conversation** during a streamed reply; the old turn stops and cannot reappear.
 - [ ] An HTTP remote endpoint is rejected; a loopback HTTP model remains usable.
+- [ ] With **Remember key on this device** unchecked, saving and reopening the panel keeps the key; restarting the browser clears only the key, not the endpoint/model.
+- [ ] Explicitly remembering the key preserves it across browser restarts; unchecking and saving removes it from local storage, and the next restart clears it.
+- [ ] Changing the endpoint origin clears the API-key field; invalid endpoint edits cannot overwrite saved settings.
+- [ ] A fixture endpoint that echoes a dummy key in an HTTP/SSE error shows `[REDACTED]`, not the key.
 
 ## Extension IDs and OAuth redirect URLs
 

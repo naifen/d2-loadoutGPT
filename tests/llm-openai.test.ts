@@ -22,13 +22,13 @@ test('data: [DONE] terminates the stream', async () => {
 });
 
 test('a 429 with Retry-After classifies as rate-limit carrying the wait', () => {
-  const err = classify(429, new Headers({ 'retry-after': '45' }), '{"error":{"message":"slow down"}}');
+  const err = classify(429, new Headers({ 'retry-after': '45' }), '{"error":{"message":"slow down"}}', '');
   expect(err.kind).toBe('rate-limit');
   expect(err.retryAfterSeconds).toBe(45);
 });
 
 test('a 400 "does not support tools" body classifies as tools-unsupported', () => {
-  const err = classify(400, new Headers(), '{"error":"model does not support tools"}');
+  const err = classify(400, new Headers(), '{"error":"model does not support tools"}', '');
   expect(err.kind).toBe('tools-unsupported');
 });
 
@@ -65,4 +65,31 @@ test('malformed SSE data fails visibly instead of silently dropping a model resp
 
 test('oversized unterminated SSE input fails before unbounded buffering', async () => {
   await expect(collect('data: ' + 'x'.repeat(20 * 1024 * 1024))).rejects.toThrow(/response exceeded/);
+});
+
+test.each(['json', 'text', 'stream', 'finish-reason', 'network'])('%s errors cannot expose the configured API key', async (kind) => {
+  const apiKey = 'fixture.secret+$[key]';
+  const detail = `Invalid credential: ${apiKey}; repeated: ${apiKey}`;
+  const fetch = vi.spyOn(globalThis, 'fetch');
+  if (kind === 'network') {
+    fetch.mockRejectedValue(new Error(detail));
+  } else if (kind === 'json' || kind === 'text') {
+    fetch.mockResolvedValue(new Response(kind === 'json' ? JSON.stringify({ error: { message: detail } }) : detail, { status: 401 }));
+  } else {
+    const event = kind === 'stream' ? { error: { code: 401, message: detail } }
+      : { choices: [{ delta: {}, finish_reason: detail }] };
+    fetch.mockResolvedValue(new Response(`data: ${JSON.stringify(event)}\n\n`, { headers: { 'content-type': 'text/event-stream' } }));
+  }
+  const error = await createOpenAITransport({ baseUrl: 'http://localhost/v1', apiKey, model: 'fixture' })
+    .complete([], []).catch((e: Error) => e);
+  expect(error).toBeInstanceOf(Error);
+  expect((error as Error).message).not.toContain(apiKey);
+  expect((error as Error).message).toContain('[REDACTED]');
+});
+
+test('error excerpts redact a key before truncating it', () => {
+  const apiKey = 'fixture-secret-crossing-the-excerpt-boundary';
+  const error = classify(401, new Headers(), 'x'.repeat(290) + apiKey, apiKey);
+  expect(error.message).not.toContain('fixture');
+  expect(error.message).toContain('[REDACTED]');
 });
