@@ -4,12 +4,12 @@
 // history (minus system prompt) persists in session storage so it survives
 // panel closes but not a browser restart.
 //
-// Hook for #9: a turn that ends on the terminal tool arrives here as a Row of
-// kind 'proposal' carrying TurnResult.toolOutput — replace the placeholder
-// rendering with the build card + DIM link + copy buttons.
+// A turn that ends on the terminal propose_loadout tool arrives here as a Row
+// of kind 'proposal' carrying the LoadoutProposal — rendered by BuildCard (#9).
 
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { runAgentTurn, type TurnResult } from '../agent/runner';
+import type { LoadoutProposal } from '../agent/tools';
 import type { ChatMessage } from '../agent/transport';
 import { getTokens } from '../bungie/auth';
 import { getManifestVersion, openManifest, type Manifest } from '../bungie/manifest';
@@ -17,12 +17,13 @@ import { getSnapshot } from '../bungie/profile';
 import { createOpenAITransport, LlmError } from '../llm/openai';
 import { clearChatHistory, loadChatHistory, saveChatHistory } from '../storage/chatHistory';
 import { getLlmSettings, isLlmConfigured } from '../storage/llmSettings';
+import { BuildCard } from './BuildCard';
 
 type Row =
   | { kind: 'user'; text: string }
   | { kind: 'assistant'; text: string }
   | { kind: 'activity'; id: string; label: string; done: boolean }
-  | { kind: 'proposal'; status: string; output: unknown }
+  | { kind: 'proposal'; output: LoadoutProposal }
   | { kind: 'notice'; text: string }
   | { kind: 'error'; text: string };
 
@@ -167,8 +168,8 @@ export function Chat() {
           text: 'The assistant hit its tool-call limit before finishing — try a narrower request.',
         });
       } else if (result.status !== 'answer') {
-        // Terminal tool (propose_loadout, #7): #9 renders the real build card.
-        appendRow({ kind: 'proposal', status: result.status, output: result.toolOutput });
+        // Terminal tool (propose_loadout, #7) ended the turn — the build card.
+        appendRow({ kind: 'proposal', output: result.toolOutput as LoadoutProposal });
       }
     } catch (e) {
       appendRow({ kind: 'error', text: errorText(e) });
@@ -249,13 +250,7 @@ function renderRow(row: Row) {
         </p>
       );
     case 'proposal':
-      // #9 replaces this placeholder with the build card, DIM link and copy buttons.
-      return (
-        <div>
-          <p>Loadout proposed (status: {row.status}).</p>
-          <pre style={{ whiteSpace: 'pre-wrap' }}>{JSON.stringify(row.output, null, 2)}</pre>
-        </div>
-      );
+      return <BuildCard proposal={row.output} />;
     case 'notice':
       return (
         <p>

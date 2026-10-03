@@ -86,6 +86,45 @@ Because the base URL is user-configured (including `http://localhost:*`), the ma
 requests `<all_urls>` host permission — a fixed list can't cover arbitrary endpoints.
 The extension still only ever contacts Bungie.net plus the endpoint you configure.
 
+## Usage
+
+1. Open the side panel (Chrome) or sidebar (Firefox) via the toolbar button.
+2. **Log in with Bungie** — the panel lists your characters once signed in.
+3. Fill in the **LLM endpoint** fields (base URL, API key, model) and save.
+4. On first run, wait for the game definitions download to finish (progress is
+   shown per table), then hit **Refresh** next to your characters so the
+   inventory snapshot is current.
+5. Ask for a build in plain language, e.g.
+   *"build me a solar titan loadout using <exotic armor> + <exotic weapon> for a
+   Grandmaster Nightfall"*. The assistant searches your vault, reads item rolls,
+   subclass options and the seasonal artifact, then finishes with a build card:
+   the item list, subclass configuration, armor mods, and why the pieces work
+   together. If something you asked for isn't in your inventory (e.g. you don't
+   own that exotic), it says so and suggests the closest owned alternative.
+6. Click **Open in DIM** on the card — a new tab opens `app.destinyitemmanager.com`
+   with the loadout drawer already populated. DIM always shows the loadout for
+   review first; click **Apply** inside DIM to equip it.
+   **Copy DIM link** puts the same URL on your clipboard, and **Copy search
+   query** puts the `id:` query there — paste it into DIM's search box to
+   highlight exactly the items in the build.
+
+## Manual end-to-end checklist
+
+The automated suite covers the agent turn runner only; everything else is
+verified by hand. Run this in **both** browsers (`pnpm build` →
+`.output/chrome-mv3`, `pnpm build:firefox` → `.output/firefox-mv2`):
+
+- [ ] Load the unpacked extension; the toolbar button opens the side panel (Chrome) / sidebar (Firefox).
+- [ ] **Log in with Bungie** completes the OAuth flow and shows your Bungie name and characters.
+- [ ] Game definitions download with visible per-table progress, then "Manifest: \<version\>" appears.
+- [ ] With the LLM endpoint saved, a message gets a streamed response (text grows as it arrives).
+- [ ] During a build request, tool-activity rows ("Searching the vault…" etc.) appear and check off.
+- [ ] The request ends with a build card showing the name, item list, subclass line, mods, and rationale.
+- [ ] **Copy DIM link** and **Copy search query** each flash "Copied" and put the exact link / `id:` query on the clipboard (paste into a text field to verify).
+- [ ] **Open in DIM** opens a new tab on `app.destinyitemmanager.com` with the loadout drawer populated; Apply works inside DIM.
+- [ ] Asking for an exotic you don't own produces a text answer naming an owned alternative — no dead end.
+- [ ] Closing and reopening the panel keeps the conversation; restarting the browser clears it.
+
 ## Extension IDs and OAuth redirect URLs
 
 Bungie allows one redirect URL per app, and Chrome and Firefox use different redirect hosts,
