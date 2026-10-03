@@ -147,3 +147,46 @@ test('a runaway tool loop stops at the iteration cap', async () => {
   expect(result.status).toBe('iteration-cap');
   expect(transport.received).toHaveLength(3);
 });
+
+test.each(['null', '[]', '"text"', '42'])('non-object tool arguments %s return a correctable error', async (argumentsJson) => {
+  const { result } = await run([
+    { toolCalls: [{ id: 'invalid', name: 'get_characters', arguments: argumentsJson }] },
+    { content: 'recovered' },
+  ]);
+  expect(toolMessages(result)[0].error).toContain('expected a JSON object');
+});
+
+test('cancellation stops the remaining local tool batch, not only the next HTTP request', async () => {
+  const controller = new AbortController();
+  const base = createFixtureManifest();
+  let lookupsAfterAbort = 0;
+  const manifest = {
+    ...base,
+    getItem: async (hash: number) => {
+      if (controller.signal.aborted) lookupsAfterAbort++;
+      return base.getItem(hash);
+    },
+  };
+  const turn = runAgentTurn({
+    transport: scriptedTransport([{ toolCalls: [
+      { id: 'first', name: 'get_characters', arguments: '{}' },
+      { id: 'second', name: 'search_items', arguments: '{}' },
+    ] }]),
+    manifest,
+    snapshot: createFixtureSnapshot(),
+    messages: [{ role: 'user', content: 'build' }],
+    signal: controller.signal,
+    onEvent: (event) => { if (event.type === 'tool-result') controller.abort(); },
+  });
+  await expect(turn).rejects.toMatchObject({ name: 'AbortError' });
+  expect(lookupsAfterAbort).toBe(0);
+});
+
+test('an oversized single tool batch is bounded before expensive vault work starts', async () => {
+  const { result, events } = await run([{ toolCalls: Array.from({ length: 1000 }, (_, index) => ({
+    id: `bulk_${index}`, name: 'search_items', arguments: '{}',
+  })) }]);
+  expect(result.status).toBe('iteration-cap');
+  expect(toolMessages(result)).toEqual([]);
+  expect(events).toEqual([]);
+});

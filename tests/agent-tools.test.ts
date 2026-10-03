@@ -8,6 +8,21 @@ import type { AssistantTurn, LLMTransport } from '../src/agent/transport';
 import { createFixtureManifest, HASH } from './fixtures/manifest';
 import { createFixtureSnapshot, HUNTER_ID, TITAN_ID } from './fixtures/snapshot';
 
+interface PlugRow {
+  hash: number; name: string; description: string; socketIndex: number; socketIndexes: number[];
+  equipped: boolean; unlocked: boolean; cost?: number;
+}
+interface ReadResult {
+  name: string; instanceId: string; element: string; owner: string;
+  masterwork: boolean; exotic: boolean; stats: Record<string, number>;
+  setBonus: { name: string; perks: { requiredSetCount: number; name: string; description: string }[] };
+  sockets: { index: number; category: string; plugged: PlugRow; options: PlugRow[] }[];
+  groups: Record<'super' | 'classAbility' | 'movement' | 'melee' | 'grenade' | 'aspects' | 'fragments', PlugRow[]>;
+  aspectSockets: number; fragmentSockets: number; fragmentCapacity: number; error: string;
+  characterId: string; powerBonus: number; pointsUsed: number; pointsAvailable: number;
+  columns: { perks: PlugRow[] }[];
+}
+
 /** Script: one tool call, then a fixed final answer. Returns the parsed tool result. */
 async function callTool(name: string, args: Record<string, unknown> = {}): Promise<unknown> {
   const turns: AssistantTurn[] = [
@@ -99,7 +114,7 @@ test('search_items rows carry the compact fields the model needs', async () => {
 // ---------------------------------------------------------------------------
 
 test('get_item returns sockets, stats, set bonus and masterwork for the vault helmet', async () => {
-  const res = (await callTool('get_item', { instanceId: 'a1' })) as any;
+  const res = await callTool('get_item', { instanceId: 'a1' }) as ReadResult;
   expect(res.name).toBe('Aion Renewal Casque');
   expect(res.masterwork).toBe(true);
   expect(res.exotic).toBe(false);
@@ -114,32 +129,32 @@ test('get_item returns sockets, stats, set bonus and masterwork for the vault he
 });
 
 test('get_item lists each socket with the plugged plug and selectable options', async () => {
-  const res = (await callTool('get_item', { instanceId: 'w1' })) as any;
-  const perkSocket = res.sockets.find((s: any) => s.index === 1);
+  const res = await callTool('get_item', { instanceId: 'w1' }) as ReadResult;
+  const perkSocket = res.sockets.find((s) => s.index === 1)!;
   expect(perkSocket.category).toBe('Weapon Perks');
   expect(perkSocket.plugged.name).toBe('Incandescent');
-  expect(perkSocket.options.map((o: any) => o.name)).toEqual(['Incandescent', 'Heal Clip']);
-  expect(perkSocket.options[0].description).toContain('scorch');
-  const modSocket = res.sockets.find((s: any) => s.index === 3);
+  expect(perkSocket.options.map((o) => o.name)).toEqual(['Incandescent', 'Heal Clip']);
+  expect(perkSocket.options[0]!.description).toContain('scorch');
+  const modSocket = res.sockets.find((s) => s.index === 3)!;
   expect(modSocket.category).toBe('Weapon Mods');
   expect(modSocket.plugged.name).toBe('Backup Mag');
 });
 
 test('get_item on an unknown instance returns an error result', async () => {
-  const res = (await callTool('get_item', { instanceId: 'zzz' })) as any;
+  const res = await callTool('get_item', { instanceId: 'zzz' }) as ReadResult;
   expect(res.error).toContain('zzz');
 });
 
 // ---------------------------------------------------------------------------
 
 test('list_subclass_options groups unlocked plugs by socket with hashes', async () => {
-  const res = (await callTool('list_subclass_options', { classType: 'titan', damageType: 'solar' })) as any;
+  const res = await callTool('list_subclass_options', { classType: 'titan', damageType: 'solar' }) as ReadResult;
   expect(res.instanceId).toBe('s1');
   expect(res.element).toBe('Solar');
   expect(res.aspectSockets).toBe(2);
   expect(res.fragmentSockets).toBe(4);
 
-  const names = (group: any[]) => group.map((p) => p.name);
+  const names = (group: PlugRow[]) => group.map((p) => p.name);
   expect(names(res.groups.super)).toEqual(['Hammer of Sol', 'Burning Maul']);
   expect(names(res.groups.classAbility)).toEqual(['Towering Barricade', 'Rally Barricade']);
   expect(names(res.groups.movement)).toEqual(['High Lift', 'Strafe Lift']);
@@ -153,48 +168,64 @@ test('list_subclass_options groups unlocked plugs by socket with hashes', async 
     'Ember of Ashes',
   ]);
   // The locked fragment is filtered out; every listed option is unlocked.
-  expect(res.groups.fragments.every((p: any) => p.unlocked === true)).toBe(true);
+  expect(res.groups.fragments.every((p) => p.unlocked === true)).toBe(true);
 
-  const hammer = res.groups.super.find((p: any) => p.hash === HASH.supHammer);
+  const hammer = res.groups.super.find((p) => p.hash === HASH.supHammer)!;
   expect(hammer).toMatchObject({ description: 'Hurl a flaming hammer.', socketIndex: 0, equipped: true });
-  const maul = res.groups.super.find((p: any) => p.hash === HASH.supBurning);
+  expect(hammer.socketIndexes).toEqual([0]);
+  expect(res.groups.aspects.find((p) => p.hash === HASH.aspectConsecration)!.socketIndexes).toEqual([5, 6]);
+  expect(res.groups.fragments.find((p) => p.hash === HASH.fragWonder)!.socketIndexes).toEqual([7, 8, 9, 10]);
+  const maul = res.groups.super.find((p) => p.hash === HASH.supBurning)!;
   expect(maul.equipped).toBe(false);
 });
 
 test('list_subclass_options reports fragment capacity from equipped aspects and fragment costs', async () => {
-  const res = (await callTool('list_subclass_options', { classType: 'titan', damageType: 'solar' })) as any;
+  const res = await callTool('list_subclass_options', { classType: 'titan', damageType: 'solar' }) as ReadResult;
   // Sol Invictus (3) + Roaring Flames (4) equipped.
   expect(res.fragmentCapacity).toBe(7);
-  const wonder = res.groups.fragments.find((p: any) => p.name === 'Ember of Wonder');
+  const wonder = res.groups.fragments.find((p) => p.name === 'Ember of Wonder')!;
   expect(wonder.cost).toBe(2);
 });
 
 test('list_subclass_options errors clearly when no such subclass exists', async () => {
-  const res = (await callTool('list_subclass_options', { classType: 'hunter', damageType: 'solar' })) as any;
+  const res = await callTool('list_subclass_options', { classType: 'hunter', damageType: 'solar' }) as ReadResult;
   expect(res.error).toContain('solar hunter');
 });
 
 // ---------------------------------------------------------------------------
 
 test('get_artifact returns columns, unlocked flags and points', async () => {
-  const res = (await callTool('get_artifact')) as any;
+  const res = await callTool('get_artifact') as ReadResult;
   expect(res.name).toBe('Tablet of Ruin');
   expect(res.characterId).toBe(TITAN_ID); // most recently played
   expect(res.powerBonus).toBe(15);
   expect(res.pointsUsed).toBe(3);
   expect(res.pointsAvailable).toBe(7);
   expect(res.columns).toHaveLength(3);
-  expect(res.columns[0].perks).toEqual([
+  expect(res.columns[0]!.perks).toEqual([
     { hash: HASH.artAntiBarrier, name: 'Anti-Barrier Rounds', description: 'Pierce Barrier champions.', unlocked: true },
     { hash: HASH.artUnstoppable, name: 'Unstoppable Burst', description: 'Stagger Unstoppable champions.', unlocked: false },
   ]);
-  expect(res.columns[2].perks[0]).toMatchObject({ name: 'Argent Ordnance', unlocked: false });
+  expect(res.columns[2]!.perks[0]).toMatchObject({ name: 'Argent Ordnance', unlocked: false });
 });
 
 test('get_artifact for a character without unlocks reports everything locked', async () => {
-  const res = (await callTool('get_artifact', { characterId: HUNTER_ID })) as any;
+  const res = await callTool('get_artifact', { characterId: HUNTER_ID }) as ReadResult;
   expect(res.characterId).toBe(HUNTER_ID);
   expect(res.pointsUsed).toBe(0);
   expect(res.pointsAvailable).toBe(10);
-  expect(res.columns[0].perks.every((p: any) => p.unlocked === false)).toBe(true);
+  expect(res.columns[0]!.perks.every((p) => p.unlocked === false)).toBe(true);
+});
+
+test('subclass and artifact character selectors reject the wrong target instead of silently substituting', async () => {
+  const subclass = await callTool('list_subclass_options', {
+    classType: 'titan', damageType: 'solar', characterId: HUNTER_ID,
+  }) as ReadResult;
+  expect(subclass.error).toContain('requested class');
+  const artifact = await callTool('get_artifact', { characterId: 'missing' }) as ReadResult;
+  expect(artifact.error).toContain('Unknown characterId');
+});
+
+test('search limit is an integer row cap', async () => {
+  expect((await search({ limit: 1.5 })).items).toHaveLength(1);
 });

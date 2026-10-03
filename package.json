@@ -16,6 +16,8 @@
     "postinstall": "wxt prepare"
   },
   "dependencies": {
+    "dompurify": "^3.4.16",
+    "marked": "^18.0.14",
     "preact": "10.29.8"
   },
   "devDependencies": {

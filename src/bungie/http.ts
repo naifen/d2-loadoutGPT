@@ -1,4 +1,4 @@
-import { getAccessToken, logout } from './auth';
+import { getAccessToken, getTokens, logout, withAuthSession } from './auth';
 import { BungieError } from './errors';
 
 export { BungieError } from './errors';
@@ -25,21 +25,27 @@ interface Envelope<T> {
  * Resolves with the envelope's `Response`; throws BungieError otherwise.
  */
 export async function bungieFetch<T = unknown>(path: string, init?: RequestInit): Promise<T> {
+  const tokens = await getTokens();
+  if (!tokens) throw new BungieError('login-required', 'Not logged in to Bungie.');
+  const sessionId = tokens.sessionId;
   const token = await getAccessToken();
+  if ((await getTokens())?.sessionId !== sessionId) {
+    throw new BungieError('login-required', 'The Bungie account changed. Please try again.');
+  }
   const headers = new Headers(init?.headers);
   headers.set('X-API-Key', import.meta.env.WXT_BUNGIE_API_KEY);
   headers.set('Authorization', `Bearer ${token}`);
-  const res = await fetch(PLATFORM_URL + path, { ...init, headers });
+  const res = await fetch(PLATFORM_URL + path, { ...init, headers, redirect: 'error' });
 
   // Maintenance responses can be HTML or OAuth-style {error, error_description}.
   const body: Partial<Envelope<T>> & { error_description?: string } = await res.json().catch(() => ({}));
   const code = body.ErrorCode;
 
   if (res.status === 401 || (code !== undefined && LOGIN_REQUIRED.has(code))) {
-    await logout();
+    await logout(sessionId, token);
     throw new BungieError('login-required', 'Your Bungie session has expired. Please log in again.', code);
   }
-  if (code === 1) return body.Response as T;
+  if (code === 1) return withAuthSession(sessionId, async () => body.Response as T);
   if (code === SYSTEM_DISABLED || body.error_description === 'SystemDisabled') {
     throw new BungieError('maintenance', `Bungie.net is down for maintenance. ${body.Message ?? ''}`.trim(), code);
   }

@@ -1,11 +1,4 @@
-// The five read-only agent tools (spec #1 "Tool contract"): get_characters,
-// search_items, get_item, list_subclass_options, get_artifact. Each tool is an
-// OpenAI `tools` schema plus an executor that runs against the injected
-// ProfileSnapshot + Manifest — no network, no IndexedDB, no browser APIs.
-//
-// Output rows are deliberately compact: every row lands in the model's
-// context window. Ticket #7 adds the terminal propose_loadout tool by
-// appending to AGENT_TOOLS — the runner dispatches through executeAgentTool.
+// Five read tools and the concrete proposal tool, executed only against local data.
 
 import {
   ABILITY_SOCKET_CATEGORIES,
@@ -13,16 +6,12 @@ import {
   BUCKET_HASHES,
   BUCKET_NAMES,
   bucketHashFor,
-  CLASS_NAMES,
   CLASS_TYPES,
-  DAMAGE_TYPE_NAMES,
   FRAGMENT_SOCKET_CATEGORIES,
   GEAR_BUCKET_HASHES,
-  ITEM_CATEGORY_HASHES,
   ITEM_STATE,
   ITEM_TYPES,
   PERK_SOCKET_CATEGORIES,
-  SOCKET_PLUG_SOURCES,
   STAT_HASHES,
   SUPER_SOCKET_CATEGORIES,
   TIER_TYPES,
@@ -30,41 +19,15 @@ import {
 import type {
   DestinyInventoryItemDefinition,
   DestinySocketEntry,
-  Manifest,
 } from '../bungie/manifest';
-import {
-  charactersFromSnapshot,
-  type DestinyItemComponent,
-  type DestinyItemPlug,
-  type ProfileSnapshot,
-} from '../bungie/profile';
-import { PROPOSE_LOADOUT_TOOL_NAME } from './system-prompt';
+import { charactersFromSnapshot } from '../bungie/profile';
+import type { DestinyItemComponent } from '../bungie/profile';
+import { proposeLoadout } from './proposal';
+import { collectItems, slotBucket, elementName, socketOptions, aspectCapacity, str, errorResult } from './item-context';
+import type { OwnedItem, AgentTool, AgentToolContext, ToolExecution } from './item-context';
 import type { ToolSchema } from './transport';
+import { isRecord } from '../type-guards';
 
-// ---------------------------------------------------------------------------
-// Dispatch plumbing
-
-export interface AgentToolContext {
-  snapshot: ProfileSnapshot;
-  manifest: Manifest;
-}
-
-export interface ToolExecution {
-  /** JSON-serialized and sent back to the model as the tool result. */
-  result: unknown;
-  /**
-   * Set by a terminal tool (propose_loadout, #7): the runner stops looping
-   * and returns { status, toolOutput: output }.
-   */
-  terminal?: { status: string; output?: unknown };
-}
-
-export interface AgentTool {
-  schema: ToolSchema;
-  execute(args: Record<string, unknown>, ctx: AgentToolContext): Promise<ToolExecution>;
-}
-
-const errorResult = (message: string): ToolExecution => ({ result: { error: message } });
 
 /** Look up a tool by model-facing name and run it; never throws. */
 export async function executeAgentTool(
@@ -78,7 +41,11 @@ export async function executeAgentTool(
   }
   let args: Record<string, unknown>;
   try {
-    args = argsJson ? (JSON.parse(argsJson) as Record<string, unknown>) : {};
+    const parsed: unknown = argsJson ? JSON.parse(argsJson) : {};
+    if (!isRecord(parsed)) {
+      return errorResult(`Malformed arguments for ${name}: expected a JSON object.`);
+    }
+    args = parsed;
   } catch {
     return errorResult(`Malformed arguments for ${name}: expected a JSON object.`);
   }
@@ -92,55 +59,6 @@ export async function executeAgentTool(
 // ---------------------------------------------------------------------------
 // Shared helpers
 
-interface OwnedItem {
-  item: DestinyItemComponent;
-  /** 'vault' or a characterId. */
-  owner: string;
-  equipped: boolean;
-}
-
-/** Every owned item: vault + each character's inventory and equipment. */
-function collectItems(snapshot: ProfileSnapshot): OwnedItem[] {
-  const out: OwnedItem[] = [];
-  for (const item of snapshot.profileInventory?.data.items ?? []) {
-    out.push({ item, owner: 'vault', equipped: false });
-  }
-  for (const [charId, inv] of Object.entries(snapshot.characterInventories?.data ?? {})) {
-    for (const item of inv.items) out.push({ item, owner: charId, equipped: false });
-  }
-  for (const [charId, eq] of Object.entries(snapshot.characterEquipment?.data ?? {})) {
-    for (const item of eq.items) out.push({ item, owner: charId, equipped: true });
-  }
-  return out;
-}
-
-/**
- * The equipment slot an item belongs to. The definition's equip slot wins —
- * items sitting in the vault's General bucket still report their real slot.
- */
-function slotBucket(item: DestinyItemComponent, def?: DestinyInventoryItemDefinition): number {
-  return (
-    def?.equippingBlock?.equipmentSlotTypeHash ?? def?.inventory?.bucketTypeHash ?? item.bucketHash
-  );
-}
-
-async function elementName(
-  ctx: AgentToolContext,
-  item: DestinyItemComponent,
-  def?: DestinyInventoryItemDefinition,
-): Promise<string | null> {
-  const hash =
-    ctx.snapshot.itemComponents?.instances?.data[item.itemInstanceId ?? '']?.damageTypeHash ??
-    def?.defaultDamageTypeHash;
-  if (hash) {
-    const dt = await ctx.manifest.getDamageType(hash);
-    if (dt?.displayProperties.name) return dt.displayProperties.name;
-  }
-  const enumValue =
-    ctx.snapshot.itemComponents?.instances?.data[item.itemInstanceId ?? '']?.damageType ??
-    def?.defaultDamageType;
-  return enumValue != null ? (DAMAGE_TYPE_NAMES[enumValue] ?? null) : null;
-}
 
 function power(ctx: AgentToolContext, item: DestinyItemComponent): number | undefined {
   const stat = ctx.snapshot.itemComponents?.instances?.data[item.itemInstanceId ?? '']?.primaryStat;
@@ -160,81 +78,6 @@ async function plugSummary(ctx: AgentToolContext, hash: number) {
   return { hash, name: def.displayProperties.name, description: def.displayProperties.description };
 }
 
-/**
- * Options a socket exposes, from the live unlocked sources only:
- * itemComponents.reusablePlugs plus profile/character plugSets when
- * socketEntry.plugSources says so. `includeStatic` additionally falls back to
- * the definition's reusablePlugItems/plugSet/singleInitialItemHash (possible
- * rolls, not proven-unlocked) — used by get_item, not list_subclass_options.
- * Exception: when plugSources delegates to the live plugSet components, the
- * static plugSet is never a fallback — rolls are not unlocks.
- */
-async function socketOptions(
-  ctx: AgentToolContext,
-  owned: OwnedItem,
-  socketIndex: number,
-  entry: DestinySocketEntry | undefined,
-  includeStatic: boolean,
-): Promise<{ hash: number; name: string; description: string; unlocked: boolean; equipped: boolean; cost?: number }[]> {
-  const iid = owned.item.itemInstanceId ?? '';
-  const plugged = ctx.snapshot.itemComponents?.sockets?.data[iid]?.sockets[socketIndex]?.plugHash;
-  const candidates = new Map<number, DestinyItemPlug>();
-
-  const live =
-    ctx.snapshot.itemComponents?.reusablePlugs?.data[iid]?.plugs[String(socketIndex)] ?? [];
-  for (const p of live) candidates.set(p.plugItemHash, p);
-
-  const plugSetHash = entry?.reusablePlugSetHash ?? entry?.randomizedPlugSetHash;
-  const sources = entry?.plugSources ?? 0;
-  if (plugSetHash && sources & SOCKET_PLUG_SOURCES.profilePlugSet) {
-    for (const p of ctx.snapshot.profilePlugSets?.data.plugs[String(plugSetHash)] ?? []) {
-      candidates.set(p.plugItemHash, p);
-    }
-  }
-  if (plugSetHash && sources & SOCKET_PLUG_SOURCES.characterPlugSet) {
-    for (const p of ctx.snapshot.characterPlugSets?.data[owned.owner]?.plugs[String(plugSetHash)] ?? []) {
-      candidates.set(p.plugItemHash, p);
-    }
-  }
-
-  if (includeStatic && candidates.size === 0) {
-    const asPlug = (plugItemHash: number): DestinyItemPlug => ({
-      plugItemHash,
-      canInsert: true,
-      enabled: true,
-    });
-    for (const p of entry?.reusablePlugItems ?? []) {
-      candidates.set(p.plugItemHash, asPlug(p.plugItemHash));
-    }
-    if (
-      plugSetHash &&
-      !(sources & (SOCKET_PLUG_SOURCES.profilePlugSet | SOCKET_PLUG_SOURCES.characterPlugSet))
-    ) {
-      const plugSet = await ctx.manifest.getPlugSet(plugSetHash);
-      for (const p of plugSet?.reusablePlugItems ?? []) {
-        if (p.currentlyCanRoll !== false) candidates.set(p.plugItemHash, asPlug(p.plugItemHash));
-      }
-    }
-    if (entry?.singleInitialItemHash != null) {
-      candidates.set(entry.singleInitialItemHash, asPlug(entry.singleInitialItemHash));
-    }
-  }
-
-  const out = [];
-  for (const p of candidates.values()) {
-    const def = await ctx.manifest.getItem(p.plugItemHash);
-    if (!def || def.plug?.isDummyPlug) continue;
-    out.push({
-      hash: p.plugItemHash,
-      name: def.displayProperties.name,
-      description: def.displayProperties.description,
-      unlocked: p.enabled || p.canInsert,
-      equipped: p.plugItemHash === plugged,
-      ...(def.plug?.energyCost?.energyCost != null ? { cost: def.plug.energyCost.energyCost } : {}),
-    });
-  }
-  return out;
-}
 
 /** Which socketCategoryHash a socket index belongs to on this definition. */
 function socketCategoryOf(def: DestinyInventoryItemDefinition | undefined, index: number): number | undefined {
@@ -269,7 +112,6 @@ async function setBonusDetail(ctx: AgentToolContext, itemHash: number) {
   return { name: set.displayProperties.name, perks };
 }
 
-const str = (v: unknown) => (typeof v === 'string' ? v : undefined);
 
 // ---------------------------------------------------------------------------
 // get_characters
@@ -346,7 +188,7 @@ const searchItems: AgentTool = {
     const perkFilter = str(args.perk)?.toLowerCase();
     const limit = Math.min(
       SEARCH_LIMIT_MAX,
-      Math.max(1, typeof args.limit === 'number' ? args.limit : SEARCH_LIMIT_DEFAULT),
+      Math.max(1, typeof args.limit === 'number' && Number.isFinite(args.limit) ? Math.floor(args.limit) : SEARCH_LIMIT_DEFAULT),
     );
 
     const rows = [];
@@ -364,7 +206,7 @@ const searchItems: AgentTool = {
         if (wanted == null || (def.classType !== wanted && def.classType !== 3 && def.classType != null)) continue;
       }
       if (bucketFilter != null && bucket !== bucketHashFor(bucketFilter)) continue;
-      if (tierFilter != null && def.inventory?.tierType !== TIER_TYPES[tierFilter as 'exotic' | 'legendary']) continue;
+      if (tierFilter != null && (tierFilter !== 'exotic' && tierFilter !== 'legendary' || def.inventory?.tierType !== TIER_TYPES[tierFilter])) continue;
 
       const element = await elementName(ctx, item, def);
       if (damageFilter != null && element?.toLowerCase() !== damageFilter) continue;
@@ -382,8 +224,8 @@ const searchItems: AgentTool = {
           pluggedPerkHashes.add(plugged);
           allPerkHashes.add(plugged);
         }
-        for (const p of ctx.snapshot.itemComponents?.reusablePlugs?.data[item.itemInstanceId]?.plugs[String(i)] ?? []) {
-          allPerkHashes.add(p.plugItemHash);
+        for (const p of await socketOptions(ctx, owned, i, def.sockets?.socketEntries?.[i], false)) {
+          if (p.unlocked) allPerkHashes.add(p.hash);
         }
       }
       const pluggedPerkNames: string[] = [];
@@ -508,6 +350,7 @@ interface SubclassOption {
   unlocked: boolean;
   equipped: boolean;
   socketIndex: number;
+  socketIndexes: number[];
   /** Fragment slot cost (fragments only). */
   cost?: number;
 }
@@ -548,27 +391,6 @@ async function abilityGroup(
   return undefined;
 }
 
-/** Σ of an energy value over plug item hashes — missing/null plugs count 0. */
-async function plugEnergySum(
-  ctx: AgentToolContext,
-  plugHashes: (number | undefined)[],
-  energyOf: (plug: NonNullable<DestinyInventoryItemDefinition['plug']>) => number | undefined,
-): Promise<number> {
-  let total = 0;
-  for (const hash of plugHashes) {
-    const def = hash == null ? undefined : await ctx.manifest.getItem(hash);
-    total += (def?.plug && energyOf(def.plug)) || 0;
-  }
-  return total;
-}
-
-/** Fragment slots granted by aspect plugs (Σ plug.energyCapacity.capacityValue). */
-const aspectCapacity = (ctx: AgentToolContext, plugHashes: (number | undefined)[]) =>
-  plugEnergySum(ctx, plugHashes, (p) => p.energyCapacity?.capacityValue);
-
-/** Fragment slots spent by fragment plugs (Σ plug.energyCost.energyCost). */
-const fragmentCost = (ctx: AgentToolContext, plugHashes: (number | undefined)[]) =>
-  plugEnergySum(ctx, plugHashes, (p) => p.energyCost?.energyCost);
 
 const listSubclassOptions: AgentTool = {
   schema: {
@@ -583,6 +405,7 @@ const listSubclassOptions: AgentTool = {
         properties: {
           classType: { type: 'string', enum: ['titan', 'hunter', 'warlock'] },
           damageType: { type: 'string', description: 'Subclass element name, e.g. solar or prismatic.' },
+          characterId: { type: 'string', description: 'Target character from get_characters; use when multiple characters share a class.' },
         },
         required: ['classType', 'damageType'],
       },
@@ -591,12 +414,17 @@ const listSubclassOptions: AgentTool = {
   execute: async (args, ctx) => {
     const classVal = CLASS_TYPES[str(args.classType)?.toLowerCase() ?? ''];
     const elementWanted = str(args.damageType)?.toLowerCase();
+    const characterId = str(args.characterId);
+    if (characterId && ctx.snapshot.characters?.data[characterId]?.classType !== classVal) {
+      return errorResult('characterId must identify a character of the requested class.');
+    }
     if (classVal == null || !elementWanted) {
       return errorResult('classType (titan|hunter|warlock) and damageType are required.');
     }
 
     let match: { owned: OwnedItem; def: DestinyInventoryItemDefinition; element: string | null } | undefined;
     for (const owned of collectItems(ctx.snapshot)) {
+      if (characterId && owned.owner !== characterId) continue;
       const def = await ctx.manifest.getItem(owned.item.itemHash);
       if (!def || (def.itemType !== ITEM_TYPES.subclass && slotBucket(owned.item, def) !== BUCKET_HASHES.subclass)) continue;
       if (def.classType !== classVal) continue;
@@ -643,12 +471,16 @@ const listSubclassOptions: AgentTool = {
       // The same plug can be legal in several sibling sockets (both aspect
       // sockets share a plugSet, all fragment sockets share one): list it once
       // per group, keeping the socketIndex where it is equipped when applicable.
-      const push = (entry: SubclassOption) => {
-        const dup = groups[group!].find((e) => e.hash === entry.hash);
-        if (!dup) groups[group!].push(entry);
-        else if (entry.equipped && !dup.equipped) {
-          dup.equipped = true;
-          dup.socketIndex = entry.socketIndex;
+      const entries = groups[group];
+      const push = (entry: Omit<SubclassOption, 'socketIndexes'>) => {
+        const dup = entries.find((e) => e.hash === entry.hash);
+        if (!dup) entries.push({ ...entry, socketIndexes: [entry.socketIndex] });
+        else {
+          if (!dup.socketIndexes.includes(entry.socketIndex)) dup.socketIndexes.push(entry.socketIndex);
+          if (entry.equipped && !dup.equipped) {
+            dup.equipped = true;
+            dup.socketIndex = entry.socketIndex;
+          }
         }
       };
       for (const o of options) {
@@ -713,6 +545,7 @@ const getArtifact: AgentTool = {
     // Artifact unlocks are per-character: use the requested character, else
     // the most recently played one.
     let charId = str(args.characterId);
+    if (charId && !ctx.snapshot.characters?.data[charId]) return errorResult('Unknown characterId.');
     if (!charId) {
       charId = Object.values(ctx.snapshot.characters?.data ?? {}).sort((a, b) =>
         b.dateLastPlayed.localeCompare(a.dateLastPlayed),
@@ -722,7 +555,8 @@ const getArtifact: AgentTool = {
 
     const columns = [];
     for (const [i, tier] of (artifactDef.tiers ?? []).entries()) {
-      const charTier = charArt?.tiers.find((t) => t.tierHash === tier.tierHash) ?? charArt?.tiers[i];
+      const charTier = charArt?.artifactHash === profileArt.artifactHash
+        ? charArt.tiers.find((t) => t.tierHash === tier.tierHash) : undefined;
       const perks = [];
       for (const item of tier.items) {
         const perkItemDef = await ctx.manifest.getItem(item.itemHash);
@@ -750,382 +584,10 @@ const getArtifact: AgentTool = {
   },
 };
 
-// ---------------------------------------------------------------------------
-// propose_loadout (terminal)
-//
-// The model proposes the loadout; the runner validates every reference and —
-// on success, never the model — generates the DIM loadout URL, the `id:`
-// search query and the build card. Validation failures come back as
-// { error, problems } in a normal tool result so the model can fix and
-// retry; success returns a terminal ToolExecution and the runner stops.
-
-/** Turn status the runner returns when propose_loadout succeeds. */
-export const PROPOSE_LOADOUT_STATUS = 'proposed';
-
-/** The terminal payload — #9 renders this as the build card. */
-export interface LoadoutProposal {
-  name: string;
-  url: string;
-  query: string;
-  card: string;
-}
-
-const DIM_LOADOUT_URL = 'https://app.destinyitemmanager.com/loadouts?loadout=';
-
-interface DimLoadoutItem {
-  id?: string;
-  hash: number;
-  socketOverrides?: Record<string, number>;
-}
-
-/** DIM's accepted share shape (@destinyitemmanager/dim-api-types Loadout). */
-interface DimApiLoadout {
-  id: string;
-  name: string;
-  classType: number;
-  equipped: DimLoadoutItem[];
-  unequipped: DimLoadoutItem[];
-  clearSpace: boolean;
-  parameters?: { mods?: number[] };
-  notes?: string;
-}
-
-/** Card labels in equip order — nicer than raw bucket names. */
-const CARD_BUCKETS: [number, string][] = [
-  [BUCKET_HASHES.kinetic, 'Kinetic'],
-  [BUCKET_HASHES.energy, 'Energy'],
-  [BUCKET_HASHES.power, 'Power'],
-  [BUCKET_HASHES.helmet, 'Helmet'],
-  [BUCKET_HASHES.arms, 'Arms'],
-  [BUCKET_HASHES.chest, 'Chest'],
-  [BUCKET_HASHES.legs, 'Legs'],
-  [BUCKET_HASHES.classitem, 'Class item'],
-];
-
-const proposeLoadout: AgentTool = {
-  schema: {
-    type: 'function',
-    function: {
-      name: PROPOSE_LOADOUT_TOOL_NAME,
-      description:
-        'Deliver the finished loadout. Terminal: on success the turn ends and the player gets a DIM link that opens the whole build, a search query highlighting the exact items, and your build card. Every instanceId and hash must come from tool results — never invent them. On invalid input you get a problems list; fix it and call again.',
-      parameters: {
-        type: 'object',
-        additionalProperties: false,
-        properties: {
-          name: { type: 'string', description: 'Loadout name, shown in DIM and on the build card.' },
-          classType: { type: 'string', enum: ['titan', 'hunter', 'warlock'], description: 'Class the build is for.' },
-          items: {
-            type: 'array',
-            items: { type: 'string' },
-            description:
-              'itemInstanceIds of the gear to equip — weapons and armor, at most one per slot. Do NOT include the subclass item here.',
-          },
-          subclass: {
-            type: 'object',
-            additionalProperties: false,
-            properties: {
-              instanceId: {
-                type: 'string',
-                description: 'Subclass itemInstanceId from list_subclass_options.',
-              },
-              socketOverrides: {
-                type: 'object',
-                additionalProperties: { type: 'integer' },
-                description:
-                  'Socket index -> plug item hash for the super, abilities, Aspects and Fragments chosen from list_subclass_options. Sockets you omit keep the currently equipped plug.',
-              },
-            },
-            required: ['instanceId'],
-          },
-          mods: {
-            type: 'array',
-            items: { type: 'integer' },
-            description: 'Armor mod item hashes to slot (see the mod socket options in get_item). Optional.',
-          },
-          notes: {
-            type: 'string',
-            description:
-              'Build card markdown: why these pieces, how they synergize, and which artifact perks to take.',
-          },
-        },
-        required: ['name', 'classType', 'items', 'subclass', 'notes'],
-      },
-    },
-  },
-  execute: async (args, ctx) => {
-    const problems: string[] = [];
-    const ownedById = new Map<string, OwnedItem>();
-    for (const o of collectItems(ctx.snapshot)) {
-      if (o.item.itemInstanceId != null) ownedById.set(o.item.itemInstanceId, o);
-    }
-
-    const name = str(args.name)?.trim();
-    if (!name) problems.push('name is required and must be a non-empty string.');
-
-    const className = str(args.classType)?.toLowerCase() ?? '';
-    const classType = CLASS_TYPES[className];
-    if (classType == null) {
-      problems.push(`classType must be one of titan|hunter|warlock (got ${JSON.stringify(args.classType)}).`);
-    }
-    const wrongClass = (def: DestinyInventoryItemDefinition) =>
-      classType != null && def.classType != null && def.classType !== 3 && def.classType !== classType;
-
-    // ---- gear: every instanceId must exist and claim a distinct equip slot.
-    const equipped: DimLoadoutItem[] = [];
-    const gearIds: string[] = [];
-    const gearForCard: { bucket: number; name: string }[] = [];
-    if (!Array.isArray(args.items)) {
-      problems.push('items must be an array of itemInstanceId strings.');
-    } else {
-      const seenIds = new Set<string>();
-      const bucketToId = new Map<number, string>();
-      for (const raw of args.items) {
-        const iid = str(raw);
-        if (!iid) {
-          problems.push('items must contain only itemInstanceId strings.');
-          continue;
-        }
-        if (seenIds.has(iid)) {
-          problems.push(`items lists instanceId "${iid}" twice.`);
-          continue;
-        }
-        seenIds.add(iid);
-        const owned = ownedById.get(iid);
-        if (!owned) {
-          problems.push(
-            `No item with instanceId "${iid}" in the profile snapshot — only use ids returned by search_items/get_item.`,
-          );
-          continue;
-        }
-        const def = await ctx.manifest.getItem(owned.item.itemHash);
-        if (!def) {
-          problems.push(`Item "${iid}" (hash ${owned.item.itemHash}) is missing from the manifest.`);
-          continue;
-        }
-        const bucket = slotBucket(owned.item, def);
-        if (bucket === BUCKET_HASHES.subclass) {
-          problems.push(`"${iid}" (${def.displayProperties.name}) is a subclass item — pass it via the subclass field, not items.`);
-          continue;
-        }
-        if (!GEAR_BUCKET_HASHES.has(bucket)) {
-          problems.push(`"${iid}" (${def.displayProperties.name}) is not equippable gear.`);
-          continue;
-        }
-        const clash = bucketToId.get(bucket);
-        if (clash != null) {
-          problems.push(
-            `items "${clash}" and "${iid}" both equip to the ${BUCKET_NAMES[bucket] ?? bucket} slot — pick one.`,
-          );
-          continue;
-        }
-        bucketToId.set(bucket, iid);
-        if (wrongClass(def)) {
-          problems.push(
-            `"${iid}" (${def.displayProperties.name}) is ${CLASS_NAMES[def.classType!]}-only and can't go in a ${className} loadout.`,
-          );
-          continue;
-        }
-        equipped.push({ id: iid, hash: owned.item.itemHash });
-        gearIds.push(iid);
-        gearForCard.push({ bucket, name: def.displayProperties.name });
-      }
-    }
-
-    // ---- subclass: must be an owned subclass item; each override must be a
-    // legal, unlocked option for its socket.
-    let subclassEntry: DimLoadoutItem | undefined;
-    let subclassLine = '';
-    const sub = args.subclass;
-    if (typeof sub !== 'object' || sub == null || Array.isArray(sub)) {
-      problems.push('subclass is required: { instanceId, socketOverrides? }.');
-    } else {
-      const subArgs = sub as Record<string, unknown>;
-      const subIid = str(subArgs.instanceId);
-      const subOwned = subIid ? ownedById.get(subIid) : undefined;
-      if (!subIid || !subOwned) {
-        problems.push(
-          `subclass.instanceId ${JSON.stringify(subArgs.instanceId)} is not an item in the profile snapshot — use the instanceId from list_subclass_options.`,
-        );
-      } else {
-        const subDef = await ctx.manifest.getItem(subOwned.item.itemHash);
-        if (!subDef) {
-          problems.push(`Subclass item "${subIid}" (hash ${subOwned.item.itemHash}) is missing from the manifest.`);
-        } else if (subDef.itemType !== ITEM_TYPES.subclass && slotBucket(subOwned.item, subDef) !== BUCKET_HASHES.subclass) {
-          problems.push(`"${subIid}" (${subDef.displayProperties.name}) is not a subclass item.`);
-        } else {
-          if (wrongClass(subDef)) {
-            problems.push(
-              `${subDef.displayProperties.name} is a ${CLASS_NAMES[subDef.classType!]} subclass — the loadout's classType is ${className}.`,
-            );
-          }
-          const overrides = subArgs.socketOverrides ?? {};
-          if (typeof overrides !== 'object' || Array.isArray(overrides)) {
-            problems.push('subclass.socketOverrides must be an object mapping socket index to plug hash.');
-          } else {
-            const socketCount = subDef.sockets?.socketEntries?.length ?? 0;
-            const socketStates = ctx.snapshot.itemComponents?.sockets?.data[subIid]?.sockets ?? [];
-            const chosen = new Map<number, number>();
-            for (const [key, rawHash] of Object.entries(overrides)) {
-              const idx = Number(key);
-              const plugHash = Number(rawHash);
-              if (!Number.isInteger(idx) || idx < 0 || idx >= socketCount) {
-                problems.push(
-                  `subclass.socketOverrides: "${key}" is not a socket index on ${subDef.displayProperties.name} (sockets 0–${socketCount - 1}).`,
-                );
-                continue;
-              }
-              if (!Number.isInteger(plugHash)) {
-                problems.push(`subclass.socketOverrides: socket ${idx} must map to a plug item hash.`);
-                continue;
-              }
-              const plugDef = await ctx.manifest.getItem(plugHash);
-              if (!plugDef) {
-                problems.push(`subclass.socketOverrides: plug hash ${plugHash} for socket ${idx} is not in the manifest.`);
-                continue;
-              }
-              // Legal = a live unlocked option (reusablePlugs / plugSets per
-              // plugSources), a static option when no live data exists, or the
-              // plug already sitting in that socket.
-              const options = await socketOptions(ctx, subOwned, idx, subDef.sockets?.socketEntries?.[idx], true);
-              const pluggedHash = socketStates[idx]?.plugHash;
-              if (plugHash !== pluggedHash && !options.some((o) => o.hash === plugHash && o.unlocked)) {
-                const legal = options.filter((o) => o.unlocked).map((o) => `${o.hash} (${o.name})`).join(', ');
-                problems.push(
-                  `subclass.socketOverrides: "${plugDef.displayProperties.name}" (${plugHash}) is not a legal option for socket ${idx} on ${subDef.displayProperties.name}. Legal options: ${legal || 'none'}.`,
-                );
-                continue;
-              }
-              chosen.set(idx, plugHash);
-            }
-            const plugOnSocket = new Map<number, number>();
-            for (const [idx, plugHash] of chosen) {
-              const other = plugOnSocket.get(plugHash);
-              if (other != null) {
-                problems.push(`subclass.socketOverrides: plug ${plugHash} can't go in both socket ${other} and socket ${idx}.`);
-              } else {
-                plugOnSocket.set(plugHash, idx);
-              }
-            }
-            // Fragment capacity: the effective aspects' energyCapacity must
-            // cover the effective fragments' energyCost — the same math
-            // list_subclass_options displays (overrides win, else the plug
-            // currently in the socket).
-            const aspectSockets: number[] = [];
-            const fragmentSockets: number[] = [];
-            for (const c of subDef.sockets?.socketCategories ?? []) {
-              if (ASPECT_CATS.has(c.socketCategoryHash)) aspectSockets.push(...c.socketIndexes);
-              else if (FRAGMENT_CATS.has(c.socketCategoryHash)) fragmentSockets.push(...c.socketIndexes);
-            }
-            const effectivePlug = (i: number) => chosen.get(i) ?? socketStates[i]?.plugHash;
-            const [capacity, cost] = await Promise.all([
-              aspectCapacity(ctx, aspectSockets.map(effectivePlug)),
-              fragmentCost(ctx, fragmentSockets.map(effectivePlug)),
-            ]);
-            if (cost > capacity) {
-              problems.push(
-                `subclass.socketOverrides: the chosen Fragments cost ${cost} but the chosen Aspects only grant ${capacity} of fragment capacity — drop Fragments or pick Aspects that grant more.`,
-              );
-            }
-            subclassEntry = { hash: subOwned.item.itemHash };
-            if (chosen.size) {
-              subclassEntry.socketOverrides = Object.fromEntries(
-                [...chosen].map(([i, h]) => [String(i), h]),
-              );
-            }
-            // Build card: the effective subclass config (overrides over the
-            // currently plugged state), dummy/empty plugs skipped.
-            const plugNames: string[] = [];
-            for (let i = 0; i < socketCount; i++) {
-              const h = chosen.get(i) ?? socketStates[i]?.plugHash;
-              if (h == null) continue;
-              const d = await ctx.manifest.getItem(h);
-              if (!d || d.plug?.isDummyPlug) continue;
-              plugNames.push(d.displayProperties.name);
-            }
-            const element = await elementName(ctx, subOwned.item, subDef);
-            subclassLine = `Subclass — ${subDef.displayProperties.name}${element ? ` (${element})` : ''}`;
-            if (plugNames.length) subclassLine += `: ${plugNames.join(' · ')}`;
-          }
-        }
-      }
-    }
-
-    // ---- mods: real inventory items carrying the armor-mod item category.
-    const modHashes: number[] = [];
-    const modNames: string[] = [];
-    if (args.mods != null) {
-      if (!Array.isArray(args.mods)) {
-        problems.push('mods must be an array of armor mod item hashes.');
-      } else {
-        for (const raw of args.mods) {
-          const h = Number(raw);
-          if (!Number.isInteger(h)) {
-            problems.push(`mods entries must be item hashes (got ${JSON.stringify(raw)}).`);
-            continue;
-          }
-          const def = await ctx.manifest.getItem(h);
-          if (!def) {
-            problems.push(`mods: hash ${h} is not a known item — use mod hashes from get_item socket options.`);
-            continue;
-          }
-          if (!def.itemCategoryHashes?.includes(ITEM_CATEGORY_HASHES.armorMods)) {
-            problems.push(`mods: "${def.displayProperties.name}" (${h}) is not an armor mod.`);
-            continue;
-          }
-          modHashes.push(h);
-          modNames.push(def.displayProperties.name);
-        }
-      }
-    }
-
-    const notes = str(args.notes)?.trim();
-    if (!notes) problems.push('notes is required — the build card markdown explaining the build.');
-
-    if (problems.length) {
-      return {
-        result: {
-          error: 'Invalid propose_loadout arguments — fix every problem below and call again.',
-          problems,
-        },
-      };
-    }
-
-    const loadout: DimApiLoadout = {
-      id: crypto.randomUUID(),
-      name: name!,
-      classType: classType!,
-      equipped: [...equipped, subclassEntry!],
-      unequipped: [],
-      clearSpace: false,
-      ...(modHashes.length ? { parameters: { mods: modHashes } } : {}),
-      notes: notes!,
-    };
-    const url = DIM_LOADOUT_URL + encodeURIComponent(JSON.stringify(loadout));
-    const query = gearIds.map((id) => `id:${id}`).join(' or ');
-
-    const cardLines = [notes!, '', '---', '', '## Items', ''];
-    gearForCard.sort(
-      (a, b) =>
-        CARD_BUCKETS.findIndex(([h]) => h === a.bucket) - CARD_BUCKETS.findIndex(([h]) => h === b.bucket),
-    );
-    for (const g of gearForCard) {
-      cardLines.push(`- ${CARD_BUCKETS.find(([h]) => h === g.bucket)?.[1] ?? 'Item'} — ${g.name}`);
-    }
-    cardLines.push(`- ${subclassLine}`);
-    if (modNames.length) {
-      cardLines.push('', '## Mods', '');
-      for (const m of modNames) cardLines.push(`- ${m}`);
-    }
-
-    const output: LoadoutProposal = { name: name!, url, query, card: cardLines.join('\n') };
-    return { result: output, terminal: { status: PROPOSE_LOADOUT_STATUS, output } };
-  },
-};
 
 // ---------------------------------------------------------------------------
 
-export const AGENT_TOOLS: AgentTool[] = [
+const AGENT_TOOLS: AgentTool[] = [
   getCharacters,
   searchItems,
   getItem,

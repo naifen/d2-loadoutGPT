@@ -7,11 +7,12 @@
 
 import { browser } from 'wxt/browser';
 import { CLASS_NAMES } from './constants';
-import { getTokens } from './auth';
+import { getTokens, withAuthSession } from './auth';
 import { BungieError } from './errors';
 import { bungieFetch } from './http';
 
 const STORAGE_KEY = 'profileSnapshot';
+const SESSION_KEY = 'profileFetchedThisSession';
 
 // Profiles, ProfileInventories (vault), ProfileProgression (artifact),
 // Characters, CharacterInventories, CharacterProgressions (artifact unlocks),
@@ -161,6 +162,8 @@ export interface ProfileSnapshot {
   fetchedAt: number;
   /** The Destiny membership this was fetched for. */
   membership: DestinyMembership;
+  /** Browser login session that owns this cache; absent in synthetic fixtures. */
+  authSessionId?: string;
 
   profile?: {
     data: {
@@ -312,20 +315,32 @@ export async function fetchProfileSnapshot(): Promise<ProfileSnapshot> {
  * set. Successful fetches replace the cache; failures leave it untouched.
  */
 export async function getSnapshot(forceRefresh = false): Promise<ProfileSnapshot> {
-  if (!forceRefresh) {
+  const tokens = await getTokens();
+  if (!tokens) throw new BungieError('login-required', 'Log in with Bungie first.');
+  const sessionId = tokens.sessionId;
+  return navigator.locks.request('bungie-profile', async () => {
     const cached = await getCachedSnapshot();
-    if (cached) return cached.snapshot;
-  }
-  const snapshot = await fetchProfileSnapshot();
-  await browser.storage.local.set({ [STORAGE_KEY]: snapshot });
-  return snapshot;
+    const flagged = (await browser.storage.session.get(SESSION_KEY))[SESSION_KEY];
+    if (!forceRefresh && cached?.snapshot.authSessionId === sessionId && flagged === sessionId) {
+      return withAuthSession(sessionId, async () => cached.snapshot);
+    }
+    const snapshot = { ...(await fetchProfileSnapshot()), authSessionId: sessionId };
+    await withAuthSession(sessionId, async () => {
+      await browser.storage.local.set({ [STORAGE_KEY]: snapshot });
+      await browser.storage.session.set({ [SESSION_KEY]: sessionId });
+    });
+    return snapshot;
+  });
 }
 
 /** The cached snapshot without any network access. */
 export async function getCachedSnapshot(): Promise<
   { snapshot: ProfileSnapshot; fetchedAt: number } | undefined
 > {
+  const tokens = await getTokens();
   const { [STORAGE_KEY]: snapshot } = await browser.storage.local.get(STORAGE_KEY);
   const cached = snapshot as ProfileSnapshot | undefined;
-  return cached ? { snapshot: cached, fetchedAt: cached.fetchedAt } : undefined;
+  return tokens && cached?.authSessionId === tokens.sessionId
+    ? { snapshot: cached, fetchedAt: cached.fetchedAt }
+    : undefined;
 }

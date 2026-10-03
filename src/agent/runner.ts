@@ -8,7 +8,9 @@
 import type { Manifest } from '../bungie/manifest';
 import type { ProfileSnapshot } from '../bungie/profile';
 import { buildSystemPrompt } from './system-prompt';
-import { AGENT_TOOLS, executeAgentTool, TOOL_SCHEMAS, type AgentToolContext } from './tools';
+import { executeAgentTool, TOOL_SCHEMAS } from './tools';
+import type { AgentToolContext } from './item-context';
+import type { LoadoutProposal } from './proposal';
 import type { AssistantTurn, ChatMessage, LLMTransport } from './transport';
 
 /** What the runner surfaces while it works — #8 renders these as activity rows. */
@@ -19,26 +21,11 @@ export type AgentEvent =
   | { type: 'text-delta'; delta: string }
   | { type: 'text'; content: string };
 
-export interface TurnResult {
-  /**
-   * 'answer' — the model replied with text and no tool calls.
-   * 'iteration-cap' — maxIterations tool rounds exhausted without an answer.
-   * A terminal tool may end the turn with its own status (e.g. #7's
-   * propose_loadout), in which case `toolOutput` carries its payload.
-   */
-  status: 'answer' | 'iteration-cap' | (string & {});
-  /** Final assistant text when status === 'answer'. */
-  content?: string;
-  /** Payload produced by a terminal tool, when it ended the turn. */
-  toolOutput?: unknown;
-  /**
-   * The conversation history in OpenAI wire shape — user/assistant/tool
-   * messages only (the system prompt is prepended per call and excluded so it
-   * can be rebuilt fresh each turn). Pass this back as `messages` to continue
-   * the conversation.
-   */
-  messages: ChatMessage[];
-}
+export type TurnResult = (
+  | { status: 'answer'; content: string; toolOutput?: never }
+  | { status: 'iteration-cap'; content?: never; toolOutput?: never }
+  | { status: 'proposed'; toolOutput: LoadoutProposal; content?: never }
+) & { messages: ChatMessage[] };
 
 export interface RunAgentTurnOptions {
   transport: LLMTransport;
@@ -50,14 +37,17 @@ export interface RunAgentTurnOptions {
   onEvent?: (event: AgentEvent) => void;
   /** Max LLM→tool rounds before the turn aborts with 'iteration-cap'. */
   maxIterations?: number;
+  signal?: AbortSignal;
 }
 
 const DEFAULT_MAX_ITERATIONS = 12;
+const MAX_TOOL_CALLS = 64;
 
 export async function runAgentTurn(options: RunAgentTurnOptions): Promise<TurnResult> {
-  const { transport, snapshot, manifest, onEvent } = options;
+  const { transport, snapshot, manifest, onEvent, signal } = options;
   const maxIterations = options.maxIterations ?? DEFAULT_MAX_ITERATIONS;
   const ctx: AgentToolContext = { snapshot, manifest };
+  signal?.throwIfAborted();
 
   // `history` is what we hand back (no system prompt); `wire` is what the
   // transport sees (system prompt first).
@@ -68,7 +58,9 @@ export async function runAgentTurn(options: RunAgentTurnOptions): Promise<TurnRe
   ];
 
   let iterations = 0;
+  let toolCalls = 0;
   for (;;) {
+    signal?.throwIfAborted();
     // A streaming transport (src/llm) invokes its onText hook per text
     // delta; forward those to the observer so the panel can render text as
     // it arrives. Any hook the caller set still runs.
@@ -83,6 +75,7 @@ export async function runAgentTurn(options: RunAgentTurnOptions): Promise<TurnRe
     } finally {
       transport.onText = previousOnText;
     }
+    signal?.throwIfAborted();
 
     if (!turn.toolCalls?.length) {
       const content = turn.content ?? '';
@@ -90,6 +83,8 @@ export async function runAgentTurn(options: RunAgentTurnOptions): Promise<TurnRe
       onEvent?.({ type: 'text', content });
       return { status: 'answer', content, messages: history };
     }
+    toolCalls += turn.toolCalls.length;
+    if (toolCalls > MAX_TOOL_CALLS) return { status: 'iteration-cap', messages: history };
 
     const assistant: ChatMessage = {
       role: 'assistant',
@@ -103,9 +98,14 @@ export async function runAgentTurn(options: RunAgentTurnOptions): Promise<TurnRe
     wire.push(assistant);
     history.push(assistant);
 
+    let proposal: LoadoutProposal | undefined;
     for (const call of turn.toolCalls) {
+      signal?.throwIfAborted();
       onEvent?.({ type: 'tool-call', id: call.id, name: call.name, arguments: call.arguments });
-      const execution = await executeAgentTool(call.name, call.arguments, ctx);
+      const execution = proposal
+        ? { result: { error: 'Turn already ended with a loadout proposal; this call was not executed.' } }
+        : await executeAgentTool(call.name, call.arguments, ctx);
+      signal?.throwIfAborted();
       const toolMessage: ChatMessage = {
         role: 'tool',
         tool_call_id: call.id,
@@ -114,16 +114,12 @@ export async function runAgentTurn(options: RunAgentTurnOptions): Promise<TurnRe
       wire.push(toolMessage);
       history.push(toolMessage);
       onEvent?.({ type: 'tool-result', id: call.id, name: call.name, result: execution.result });
-      if (execution.terminal) {
-        return { status: execution.terminal.status, toolOutput: execution.terminal.output, messages: history };
-      }
+      if ('proposal' in execution && execution.proposal) proposal = execution.proposal;
     }
+    if (proposal) return { status: 'proposed', toolOutput: proposal, messages: history };
 
     iterations++;
     if (iterations >= maxIterations) return { status: 'iteration-cap', messages: history };
   }
 }
 
-// Re-export so callers see the whole seam from one module.
-export { AGENT_TOOLS, TOOL_SCHEMAS };
-export type { AgentToolContext };

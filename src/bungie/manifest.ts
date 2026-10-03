@@ -10,7 +10,7 @@
 const BUNGIE = 'https://www.bungie.net';
 const DB_NAME = 'd2-loadoutgpt-manifest';
 const DB_VERSION = 1;
-const VERSION_KEY = 'manifestVersion';
+const VERSION_KEY = 'manifestGeneration';
 
 export const MANIFEST_TABLES = [
   'DestinyInventoryItemDefinition',
@@ -187,9 +187,14 @@ export interface Manifest {
   listItemSets(): Promise<DestinyEquipableItemSetDefinition[]>;
 }
 
-function openDb(): Promise<IDBDatabase> {
+/** A production reader owns an IndexedDB connection until closed. */
+export interface ManifestHandle extends Manifest {
+  close(): void;
+}
+
+function openDb(version: string): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, DB_VERSION);
+    const req = indexedDB.open(`${DB_NAME}-${version}`, DB_VERSION);
     req.onupgradeneeded = () => {
       for (const table of MANIFEST_TABLES) req.result.createObjectStore(table);
     };
@@ -200,14 +205,28 @@ function openDb(): Promise<IDBDatabase> {
 
 export async function getManifestVersion(): Promise<string | undefined> {
   const stored = await browser.storage.local.get(VERSION_KEY);
-  return stored[VERSION_KEY] as string | undefined;
+  return typeof stored[VERSION_KEY] === 'string' ? stored[VERSION_KEY] : undefined;
 }
 
-export async function ensureManifest(
-  onProgress?: (p: { table: string; done: number; total: number }) => void,
-): Promise<ManifestVersion> {
+type ManifestProgress = { table: string; done: number; total: number };
+let download: Promise<ManifestVersion> | undefined;
+const progressListeners = new Set<(p: ManifestProgress) => void>();
+
+export async function ensureManifest(onProgress?: (p: ManifestProgress) => void): Promise<ManifestVersion> {
+  if (onProgress) progressListeners.add(onProgress);
+  try {
+    download ??= Promise.resolve(navigator.locks.request('bungie-manifest', downloadManifest))
+      .finally(() => { download = undefined; });
+    return await download;
+  } finally {
+    if (onProgress) progressListeners.delete(onProgress);
+  }
+}
+
+async function downloadManifest(): Promise<ManifestVersion> {
   const apiKey = import.meta.env.WXT_BUNGIE_API_KEY;
   const res = await fetch(`${BUNGIE}/Platform/Destiny2/Manifest/`, {
+    redirect: 'error',
     headers: apiKey ? { 'X-API-Key': apiKey } : undefined,
   });
   const index = await res.json();
@@ -217,16 +236,19 @@ export async function ensureManifest(
   }
   const paths = response.jsonWorldComponentContentPaths.en as Record<string, string>;
   const version: ManifestVersion = `${response.version} ${paths['DestinyInventoryItemDefinition']}`;
-  if ((await getManifestVersion()) === version) return version;
+  const previousVersion = await getManifestVersion();
+  if (previousVersion === version) return version;
 
-  const db = await openDb();
+  // Build the next generation separately: failed downloads leave the current
+  // database and its version marker untouched.
+  const db = await openDb(version);
   try {
     let done = 0;
     for (const table of MANIFEST_TABLES) {
       const path = paths[table];
       if (!path) throw new Error(`Manifest index is missing ${table}`);
-      onProgress?.({ table, done, total: MANIFEST_TABLES.length });
-      const tableRes = await fetch(`${BUNGIE}${path}`);
+      for (const listener of progressListeners) listener({ table, done, total: MANIFEST_TABLES.length });
+      const tableRes = await fetch(`${BUNGIE}${path}`, { redirect: 'error' });
       if (!tableRes.ok) throw new Error(`Downloading ${table} failed: HTTP ${tableRes.status}`);
       // ponytail: whole-table JSON.parse peaks at ~600MB for
       // DestinyInventoryItemDefinition (~200MB JSON). Acceptable for a first
@@ -242,19 +264,22 @@ export async function ensureManifest(
         tx.onerror = tx.onabort = () => reject(tx.error);
       });
       done++;
-      onProgress?.({ table, done, total: MANIFEST_TABLES.length });
+      for (const listener of progressListeners) listener({ table, done, total: MANIFEST_TABLES.length });
     }
+    await browser.storage.local.set({ [VERSION_KEY]: version });
+  } catch (error) {
+    db.close();
+    indexedDB.deleteDatabase(`${DB_NAME}-${version}`);
+    throw error;
   } finally {
     db.close();
   }
-  // Only recorded once every table is in place, so a partial download
-  // re-runs on the next open.
-  await browser.storage.local.set({ [VERSION_KEY]: version });
+  if (previousVersion) indexedDB.deleteDatabase(`${DB_NAME}-${previousVersion}`);
   return version;
 }
 
-export async function openManifest(): Promise<Manifest> {
-  const db = await openDb();
+export async function openManifest(): Promise<ManifestHandle> {
+  const db = await openDb(await ensureManifest());
   const lookup =
     <T>(table: TableName) =>
     (hash: number) =>
@@ -264,6 +289,7 @@ export async function openManifest(): Promise<Manifest> {
         req.onerror = () => reject(req.error);
       });
   return {
+    close: () => db.close(),
     getItem: lookup('DestinyInventoryItemDefinition'),
     getPlugSet: lookup('DestinyPlugSetDefinition'),
     getSandboxPerk: lookup('DestinySandboxPerkDefinition'),

@@ -3,10 +3,8 @@ import {
   charactersFromSnapshot,
   pickLinkedProfile,
   pickMembership,
-  type DestinyCharacter,
-  type ProfileSnapshot,
-  type UserMembershipCard,
 } from '../src/bungie/profile';
+import type { DestinyCharacter, ProfileSnapshot, UserMembershipCard } from '../src/bungie/profile';
 
 const m = (membershipType: number, membershipId: string, crossSaveOverride = 0): UserMembershipCard => ({
   membershipType,
@@ -72,4 +70,22 @@ test('charactersFromSnapshot maps class names and light', () => {
     { id: 'char-2', className: 'Warlock', classType: 2, light: 1990, emblemPath: '/emblem/2' },
   ]);
   expect(charactersFromSnapshot({ fetchedAt: 0, membership: { type: 3, id: 'x' } })).toEqual([]);
+});
+
+test('characters of the same class keep their distinct character identities', () => {
+  const snapshot: ProfileSnapshot = {
+    fetchedAt: 0,
+    membership: { type: 3, id: 'dmid' },
+    characters: {
+      data: {
+        first: { ...char(0, 2010), characterId: 'titan-first' },
+        second: { ...char(0, 1990), characterId: 'titan-second' },
+      },
+      privacy: 1,
+    },
+  };
+  expect(charactersFromSnapshot(snapshot).map(({ id, className }) => ({ id, className }))).toEqual([
+    { id: 'titan-first', className: 'Titan' },
+    { id: 'titan-second', className: 'Titan' },
+  ]);
 });

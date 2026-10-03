@@ -2,22 +2,25 @@ import { useEffect, useState } from 'preact/hooks';
 import { ensureManifest } from '../bungie/manifest';
 
 type State =
+  | { phase: 'checking' }
   | { phase: 'downloading'; table: string; done: number; total: number }
   | { phase: 'ready'; version: string }
   | { phase: 'error'; message: string };
 
 export function ManifestStatus() {
-  const [state, setState] = useState<State>();
+  const [state, setState] = useState<State>({ phase: 'checking' });
 
   useEffect(() => {
-    ensureManifest(({ table, done, total }) =>
-      setState({ phase: 'downloading', table, done, total }),
-    )
-      .then((version) => setState({ phase: 'ready', version }))
-      .catch((e) => setState({ phase: 'error', message: e instanceof Error ? e.message : String(e) }));
+    let active = true;
+    ensureManifest(({ table, done, total }) => {
+      if (active) setState({ phase: 'downloading', table, done, total });
+    })
+      .then((version) => { if (active) setState({ phase: 'ready', version }); })
+      .catch((e) => { if (active) setState({ phase: 'error', message: e instanceof Error ? e.message : String(e) }); });
+    return () => { active = false; };
   }, []);
 
-  if (!state) return null;
+  if (state.phase === 'checking') return <p>Checking game definitions…</p>;
   if (state.phase === 'downloading') {
     return (
       <p>

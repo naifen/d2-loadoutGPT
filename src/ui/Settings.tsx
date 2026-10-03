@@ -1,5 +1,7 @@
-import { useEffect, useState } from 'preact/hooks';
-import { getTokens, login, logout, type BungieTokens } from '../bungie/auth';
+import { useEffect, useRef, useState } from 'preact/hooks';
+import { browser } from 'wxt/browser';
+import { getTokens, login, logout } from '../bungie/auth';
+import type { BungieTokens } from '../bungie/auth';
 import { bungieFetch } from '../bungie/http';
 import type { LlmEndpointSettings } from '../llm/openai';
 import { DEFAULT_LLM_SETTINGS, getLlmSettings, saveLlmSettings } from '../storage/llmSettings';
@@ -15,17 +17,24 @@ export function Settings() {
   const [busy, setBusy] = useState(false);
   const [llm, setLlm] = useState<LlmEndpointSettings>(DEFAULT_LLM_SETTINGS);
   const [llmSaved, setLlmSaved] = useState(false);
+  const generation = useRef(0);
 
   // Also exercises bungieFetch (API key, Origin, silent refresh) on every panel open.
   async function sync() {
+    const current = ++generation.current;
     const t = await getTokens();
+    if (current !== generation.current) return;
     setTokens(t);
-    if (!t) return setName(undefined);
+    setName(undefined);
+    if (!t) return;
     try {
-      setName((await bungieFetch<Memberships>('/User/GetMembershipsForCurrentUser/')).bungieNetUser.uniqueName);
+      const memberships = await bungieFetch<Memberships>('/User/GetMembershipsForCurrentUser/');
+      if (current === generation.current) setName(memberships.bungieNetUser.uniqueName);
     } catch (e) {
-      setError((e as Error).message);
-      setTokens(await getTokens()); // bungieFetch clears tokens on auth failures
+      if (current !== generation.current) return;
+      setError(e instanceof Error ? e.message : String(e));
+      const latest = await getTokens();
+      if (current === generation.current) setTokens(latest);
     }
   }
 
@@ -42,14 +51,28 @@ export function Settings() {
   }
 
   useEffect(() => {
-    sync();
-    getLlmSettings().then(setLlm);
+    void sync();
+    getLlmSettings().then(setLlm).catch((e) => setError(e instanceof Error ? e.message : String(e)));
+    const onChanged = (changes: Record<string, unknown>, area: string) => {
+      if (area === 'local' && 'bungieTokens' in changes) void sync();
+    };
+    browser.storage.onChanged.addListener(onChanged);
+    return () => {
+      generation.current++;
+      browser.storage.onChanged.removeListener(onChanged);
+    };
   }, []);
 
   async function saveLlm() {
-    await saveLlmSettings(llm);
-    setLlmSaved(true);
-    setTimeout(() => setLlmSaved(false), 1500);
+    setLlmSaved(false);
+    setError(undefined);
+    try {
+      await saveLlmSettings(llm);
+      setLlmSaved(true);
+      setTimeout(() => setLlmSaved(false), 1500);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
   }
 
   const setLlmField = (field: keyof LlmEndpointSettings) => (e: Event) =>

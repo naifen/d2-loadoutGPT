@@ -8,17 +8,22 @@
 // of kind 'proposal' carrying the LoadoutProposal — rendered by BuildCard (#9).
 
 import { useEffect, useRef, useState } from 'preact/hooks';
-import { runAgentTurn, type TurnResult } from '../agent/runner';
+import { browser } from 'wxt/browser';
+import type { Browser } from 'wxt/browser';
+import { runAgentTurn } from '../agent/runner';
+import type { TurnResult } from '../agent/runner';
 import { PROPOSE_LOADOUT_TOOL_NAME } from '../agent/system-prompt';
-import type { LoadoutProposal } from '../agent/tools';
+import type { LoadoutProposal } from '../agent/proposal';
 import type { ChatMessage } from '../agent/transport';
 import { getTokens } from '../bungie/auth';
-import { getManifestVersion, openManifest, type Manifest } from '../bungie/manifest';
+import { openManifest } from '../bungie/manifest';
+import type { ManifestHandle } from '../bungie/manifest';
 import { getSnapshot } from '../bungie/profile';
 import { createOpenAITransport, LlmError } from '../llm/openai';
 import { clearChatHistory, loadChatHistory, saveChatHistory } from '../storage/chatHistory';
 import { getLlmSettings, isLlmConfigured } from '../storage/llmSettings';
 import { BuildCard } from './BuildCard';
+import { isRecord } from '../type-guards';
 
 type Row =
   | { kind: 'user'; text: string }
@@ -54,23 +59,27 @@ function rowsFromHistory(messages: ChatMessage[]): Row[] {
       }
     } else if (m.role === 'tool' && callNames.get(m.tool_call_id ?? '') === PROPOSE_LOADOUT_TOOL_NAME) {
       // The terminal tool result persists the LoadoutProposal — restore the card.
-      const p = m.content ? tryParse(m.content) : undefined;
-      if (p && ['name', 'url', 'query', 'card'].every((k) => typeof p[k] === 'string')) {
-        rows.push({ kind: 'proposal', output: p as LoadoutProposal });
-      }
+      const proposal = m.content ? restoreProposal(m.content) : undefined;
+      if (proposal) rows.push({ kind: 'proposal', output: proposal });
     }
     // other tool messages need no row — the activity row already stands for them
   }
   return rows;
 }
 
-const tryParse = (text: string): any => {
+function restoreProposal(text: string): LoadoutProposal | undefined {
   try {
-    return JSON.parse(text);
+    const value: unknown = JSON.parse(text);
+    if (!isRecord(value)) return;
+    const p = value;
+    if (typeof p.name !== 'string' || typeof p.url !== 'string' || typeof p.query !== 'string' || typeof p.card !== 'string') return;
+    const url = new URL(p.url);
+    if (url.origin !== 'https://app.destinyitemmanager.com' || url.pathname !== '/loadouts' || !url.searchParams.has('loadout')) return;
+    return { name: p.name, url: p.url, query: p.query, card: p.card };
   } catch {
     return undefined;
   }
-};
+}
 
 function errorText(e: unknown): string {
   if (e instanceof LlmError) {
@@ -96,18 +105,54 @@ export function Chat() {
   const [manifestReady, setManifestReady] = useState(false);
   const runningRef = useRef(false); // state is stale within the submit tick
   const liveRef = useRef('');
-  const manifestRef = useRef<Promise<Manifest>>();
+  const manifestRef = useRef<Promise<ManifestHandle>>();
   const listRef = useRef<HTMLUListElement>(null);
+  const historyRef = useRef<ChatMessage[]>([]);
+  const generation = useRef(0);
+  const controller = useRef<AbortController>();
+  const [historyReady, setHistoryReady] = useState(false);
 
   useEffect(() => {
+    let mounted = true;
+    let manifest: ManifestHandle | undefined;
+    const current = generation.current;
     manifestRef.current = openManifest().then((m) => {
-      setManifestReady(true);
+      if (mounted) {
+        manifest = m;
+        setManifestReady(true);
+      } else m.close();
       return m;
     });
     manifestRef.current.catch((e) => {
       setRows((r) => [...r, { kind: 'error', text: `Could not open the manifest database: ${(e as Error).message}` }]);
     });
-    loadChatHistory().then((h) => setRows(rowsFromHistory(h)));
+    loadChatHistory().then((h) => {
+      if (current !== generation.current) return;
+      historyRef.current = h;
+      setRows((r) => [...rowsFromHistory(h), ...r]);
+      setHistoryReady(true);
+    }).catch((e) => {
+      if (current !== generation.current) return;
+      setRows((r) => [...r, { kind: 'error', text: errorText(e) }]);
+      setHistoryReady(true);
+    });
+    const onChanged = (changes: Record<string, Browser.storage.StorageChange>, area: string) => {
+      const change = changes.bungieTokens;
+      if (area !== 'local' || !change) return;
+      const previous = isRecord(change.oldValue) ? change.oldValue.sessionId : undefined;
+      const next = isRecord(change.newValue) ? change.newValue.sessionId : undefined;
+      if (previous === next) return;
+      resetConversation();
+      setHistoryReady(true);
+    };
+    browser.storage.onChanged.addListener(onChanged);
+    return () => {
+      mounted = false;
+      manifest?.close();
+      generation.current++;
+      controller.current?.abort();
+      browser.storage.onChanged.removeListener(onChanged);
+    };
   }, []);
 
   // Keep the latest exchange in view.
@@ -127,33 +172,34 @@ export function Chat() {
 
   async function send() {
     const text = input.trim();
-    if (!text || runningRef.current || !manifestReady) return;
-
-    const settings = await getLlmSettings();
-    if (!isLlmConfigured(settings)) {
-      return appendRow({ kind: 'notice', text: 'Set your LLM endpoint (base URL + model) in Settings above first.' });
-    }
-    if (!(await getTokens())) {
-      return appendRow({ kind: 'notice', text: 'Log in with Bungie first — the assistant works from your inventory.' });
-    }
-    if (!(await getManifestVersion())) {
-      return appendRow({ kind: 'notice', text: 'Game definitions are still downloading — try again in a moment.' });
-    }
-
-    setInput('');
-    appendRow({ kind: 'user', text });
+    if (!text || runningRef.current || !manifestReady || !historyReady) return;
     runningRef.current = true;
     setRunning(true);
+    const current = generation.current;
+    const active = () => current === generation.current;
+    const abort = new AbortController();
+    controller.current = abort;
     try {
+      const [settings, tokens] = await Promise.all([getLlmSettings(), getTokens()]);
+      if (!active()) return;
+      if (!isLlmConfigured(settings)) {
+        return appendRow({ kind: 'notice', text: 'Set your LLM endpoint (base URL + model) in Settings above first.' });
+      }
+      if (!tokens) {
+        return appendRow({ kind: 'notice', text: 'Log in with Bungie first — the assistant works from your inventory.' });
+      }
+      setInput('');
+      appendRow({ kind: 'user', text });
       const [snapshot, manifest] = await Promise.all([getSnapshot(), manifestRef.current!]);
+      if (!active()) return;
       const result: TurnResult = await runAgentTurn({
-        transport: createOpenAITransport(settings),
+        transport: createOpenAITransport(settings, abort.signal),
         snapshot,
         manifest,
-        // Session storage is the source of truth for prior context — a
-        // send can land before the mount-time restore resolved.
-        messages: [...(await loadChatHistory()), { role: 'user', content: text }],
+        signal: abort.signal,
+        messages: [...historyRef.current, { role: 'user', content: text }],
         onEvent: (event) => {
+          if (!active()) return;
           switch (event.type) {
             case 'text-delta':
               liveRef.current += event.delta;
@@ -178,19 +224,21 @@ export function Chat() {
           }
         },
       });
-      await saveChatHistory(result.messages);
+      if (!active()) return;
+      historyRef.current = result.messages;
+      if (result.status === 'proposed') appendRow({ kind: 'proposal', output: result.toolOutput });
+      await saveChatHistory(result.messages, tokens.sessionId, abort.signal);
+      if (!active()) return;
       if (result.status === 'iteration-cap') {
         appendRow({
           kind: 'notice',
           text: 'The assistant hit its tool-call limit before finishing — try a narrower request.',
         });
-      } else if (result.status !== 'answer') {
-        // Terminal tool (propose_loadout, #7) ended the turn — the build card.
-        appendRow({ kind: 'proposal', output: result.toolOutput as LoadoutProposal });
       }
     } catch (e) {
-      appendRow({ kind: 'error', text: errorText(e) });
+      if (active()) appendRow({ kind: 'error', text: errorText(e) });
     } finally {
+      if (!active()) return;
       liveRef.current = '';
       setLive('');
       runningRef.current = false;
@@ -198,11 +246,28 @@ export function Chat() {
     }
   }
 
-  async function newConversation() {
+  function resetConversation() {
+    generation.current++;
+    controller.current?.abort();
+    historyRef.current = [];
+    runningRef.current = false;
+    setRunning(false);
     liveRef.current = '';
     setLive('');
     setRows([]);
-    await clearChatHistory();
+    setInput('');
+  }
+
+  async function newConversation() {
+    resetConversation();
+    setHistoryReady(false);
+    try {
+      await clearChatHistory();
+    } catch (e) {
+      appendRow({ kind: 'error', text: errorText(e) });
+    } finally {
+      setHistoryReady(true);
+    }
   }
 
   return (
@@ -235,14 +300,15 @@ export function Chat() {
         <input
           value={input}
           onInput={(e) => setInput(e.currentTarget.value)}
-          disabled={running || !manifestReady}
+          disabled={running || !manifestReady || !historyReady}
           placeholder="e.g. Solar Titan for a Grandmaster Nightfall"
+          aria-label="Loadout request"
           style={{ width: '70%' }}
         />
-        <button type="submit" disabled={running || !manifestReady || !input.trim()}>
+        <button type="submit" disabled={running || !manifestReady || !historyReady || !input.trim()}>
           Send
         </button>{' '}
-        <button type="button" disabled={running} onClick={newConversation}>
+        <button type="button" onClick={newConversation}>
           New conversation
         </button>
       </form>

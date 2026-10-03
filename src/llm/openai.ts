@@ -15,12 +15,27 @@ import type {
   ToolCallRequest,
   ToolSchema,
 } from '../agent/transport';
+import { isRecord } from '../type-guards';
 
 /** What the Settings panel persists; see src/storage/llmSettings. */
 export interface LlmEndpointSettings {
   baseUrl: string;
   apiKey: string;
   model: string;
+}
+
+/** Keep credentials and inventory off cleartext non-loopback connections. */
+export function completionUrl(baseUrl: string): string {
+  const url = new URL(baseUrl);
+  const loopback = url.hostname === 'localhost' || url.hostname === '[::1]' || /^127(?:\.\d{1,3}){3}$/.test(url.hostname);
+  if (url.protocol !== 'https:' && !(url.protocol === 'http:' && loopback)) {
+    throw new LlmError('http', 'Use HTTPS for the LLM endpoint (HTTP is allowed only on localhost).');
+  }
+  if (url.username || url.password || url.search || url.hash) {
+    throw new LlmError('http', 'The LLM base URL must not contain credentials, a query, or a fragment.');
+  }
+  url.pathname = `${url.pathname.replace(/\/+$/, '')}/chat/completions`;
+  return url.href;
 }
 
 /** Failure categories the chat panel renders as distinct messages. */
@@ -40,6 +55,9 @@ export class LlmError extends Error {
 
 /** No bytes for this long => the connection is hung; abort the request. */
 const IDLE_TIMEOUT_MS = 60_000;
+// Finite even when an endpoint sends endless keepalives or unterminated data.
+const MAX_DURATION_MS = 10 * 60_000;
+const MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
 /** How much of a non-JSON error body is worth showing the user. */
 const BODY_EXCERPT = 300;
 
@@ -48,9 +66,10 @@ const BODY_EXCERPT = 300;
 // OpenRouter {error:{code,message,metadata}}, Ollama {error:"<string>"}.
 
 const errorMessage = (body: unknown): string | undefined => {
-  const err = body as { error?: { message?: string } | string; message?: string } | undefined;
-  if (typeof err?.error === 'string') return err.error;
-  return err?.error?.message ?? err?.message;
+  if (!isRecord(body)) return undefined;
+  if (typeof body.error === 'string') return body.error;
+  if (isRecord(body.error) && typeof body.error.message === 'string') return body.error.message;
+  return typeof body.message === 'string' ? body.message : undefined;
 };
 
 const looksLikeToolsUnsupported = (message: string) => /tool|function call/i.test(message);
@@ -83,8 +102,8 @@ export function classify(status: number, headers: Headers, bodyText: string): Ll
 
 /** Mid-stream `data: {"error": ...}` events (OpenRouter) get the same mapping. */
 function classifyStreamError(error: unknown): LlmError {
-  const { code, message } = (error ?? {}) as { code?: number; message?: string };
-  const detail = message ?? JSON.stringify(error);
+  const code = isRecord(error) && typeof error.code === 'number' ? error.code : undefined;
+  const detail = errorMessage(error) ?? JSON.stringify(error);
   if (code === 401 || code === 403) return new LlmError('auth', `Endpoint rejected the API key: ${detail}`);
   if (code === 429) return new LlmError('rate-limit', `Rate limited by the endpoint: ${detail}`);
   if (typeof code === 'number' && code >= 400 && code < 500 && looksLikeToolsUnsupported(detail)) {
@@ -107,63 +126,59 @@ const tryParse = (text: string): unknown => {
 
 export async function* sseEvents(
   stream: ReadableStream<Uint8Array>,
+  onBytes?: () => void,
 ): AsyncGenerator<Record<string, unknown>> {
   const reader = stream.getReader();
   const dec = new TextDecoder();
   let buf = '';
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buf += dec.decode(value, { stream: true });
-    let match;
-    // Separators are 2–4 bytes (\n\n, \r\n\n, \n\r\n, \r\n\r\n) — slice on the
-    // match length, not on a guessed width, or a \r\n\n eats a byte of the
-    // next event and drops its `data:` line.
-    while ((match = /\r?\n\r?\n/.exec(buf))) {
-      const raw = buf.slice(0, match.index);
-      buf = buf.slice(match.index + match[0].length);
-      const dataLines = raw
-        .split('\n')
-        .filter((l) => l.startsWith('data:'))
-        .map((l) => l.slice(5).trimStart());
-      if (!dataLines.length) continue; // comment/keepalive-only event
-      const payload = dataLines.join('\n');
-      if (payload === '[DONE]') return;
-      try {
-        yield JSON.parse(payload) as Record<string, unknown>;
-      } catch {
-        // tolerate malformed keepalives
+  let bytes = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      bytes += value.byteLength;
+      if (bytes > MAX_RESPONSE_BYTES) throw new LlmError('http', 'The endpoint response exceeded the 8 MiB limit.');
+      onBytes?.();
+      buf += dec.decode(value, { stream: true });
+      let match;
+      while ((match = /\r?\n\r?\n/.exec(buf))) {
+        const raw = buf.slice(0, match.index);
+        buf = buf.slice(match.index + match[0].length);
+        const payload = raw.split('\n').filter((line) => line.startsWith('data:'))
+          .map((line) => line.slice(5).trimStart()).join('\n').trimEnd();
+        if (!payload) continue;
+        if (payload === '[DONE]') return;
+        const event = tryParse(payload);
+        if (!isRecord(event)) throw new LlmError('http', 'The endpoint returned malformed SSE data.');
+        yield event;
       }
     }
+  } finally {
+    await reader.cancel().catch(() => {});
+    reader.releaseLock();
   }
 }
 
-// Delta chunk shapes, loosely typed — providers copy the OpenAI wire format.
-interface StreamDelta {
-  content?: string;
-  tool_calls?: {
-    index?: number;
-    id?: string;
-    function?: { name?: string; arguments?: string };
-  }[];
-}
-interface StreamChunk {
-  choices?: { delta?: StreamDelta; finish_reason?: string | null }[];
-  error?: unknown;
-}
 
-// ---------------------------------------------------------------------------
-
-export function createOpenAITransport(settings: LlmEndpointSettings): LLMTransport {
-  const url = `${settings.baseUrl.replace(/\/+$/, '')}/chat/completions`;
+export function createOpenAITransport(settings: LlmEndpointSettings, signal?: AbortSignal): LLMTransport {
+  const url = completionUrl(settings.baseUrl);
 
   const transport: LLMTransport = {
     async complete(messages: ChatMessage[], tools: ToolSchema[]): Promise<AssistantTurn> {
       const controller = new AbortController();
+      const deadline = setTimeout(() => controller.abort(new LlmError('network', 'The endpoint response exceeded the 10 minute limit.')), MAX_DURATION_MS);
       let watchdog = setTimeout(() => controller.abort(), IDLE_TIMEOUT_MS);
       const poke = () => {
         clearTimeout(watchdog);
         watchdog = setTimeout(() => controller.abort(), IDLE_TIMEOUT_MS);
+      };
+      const abort = () => controller.abort(signal?.reason);
+      signal?.addEventListener('abort', abort, { once: true });
+      if (signal?.aborted) abort();
+      const cleanup = () => {
+        clearTimeout(watchdog);
+        clearTimeout(deadline);
+        signal?.removeEventListener('abort', abort);
       };
 
       let res: Response;
@@ -171,6 +186,7 @@ export function createOpenAITransport(settings: LlmEndpointSettings): LLMTranspo
         res = await fetch(url, {
           method: 'POST',
           signal: controller.signal,
+          redirect: 'error',
           headers: {
             'Content-Type': 'application/json',
             Accept: 'text/event-stream',
@@ -184,47 +200,90 @@ export function createOpenAITransport(settings: LlmEndpointSettings): LLMTranspo
           }),
         });
       } catch (e) {
-        clearTimeout(watchdog);
+        cleanup();
+        if (signal?.aborted) throw signal.reason;
+        if (controller.signal.reason instanceof LlmError) throw controller.signal.reason;
         throw controller.signal.aborted
           ? new LlmError('network', `No response from ${url} for ${IDLE_TIMEOUT_MS / 1000}s — gave up waiting.`)
           : new LlmError('network', `Cannot reach the LLM endpoint at ${url} — check the base URL and that the server is running. (${(e as Error).message})`);
       }
 
       if (!res.ok) {
-        clearTimeout(watchdog);
-        throw classify(res.status, res.headers, await res.text().catch(() => ''));
+        try {
+          const reader = res.body?.getReader();
+          let detail = '';
+          try {
+            const first = await reader?.read();
+            // Error status already supplies the category; never buffer an untrusted error body.
+            if (first?.value) detail = new TextDecoder().decode(first.value.subarray(0, 4096));
+          } finally {
+            await reader?.cancel().catch(() => {});
+            reader?.releaseLock();
+          }
+          throw classify(res.status, res.headers, detail);
+        } finally {
+          cleanup();
+        }
+      }
+      if (!res.body || !res.headers.get('content-type')?.includes('text/event-stream')) {
+        cleanup();
+        await res.body?.cancel();
+        throw new LlmError('http', 'The endpoint did not return an SSE stream. Check the base URL and streaming support.');
       }
 
       let content = '';
       const slots = new Map<number, { id: string; name: string; args: string }>();
+      let finishReason: string | null | undefined;
       try {
-        for await (const raw of sseEvents(res.body!)) {
-          poke();
-          const chunk = raw as StreamChunk;
-          if (chunk.error) throw classifyStreamError(chunk.error);
-          for (const choice of chunk.choices ?? []) {
+        for await (const raw of sseEvents(res.body, poke)) {
+          if (raw.error) throw classifyStreamError(raw.error);
+          if (raw.choices === undefined) continue;
+          if (!Array.isArray(raw.choices)) throw new LlmError('http', 'Invalid SSE choices.');
+          const choices: unknown[] = raw.choices;
+          for (const choice of choices) {
+            if (!isRecord(choice)) throw new LlmError('http', 'Invalid SSE choice.');
+            if (choice.index !== undefined && choice.index !== 0) continue;
+            if (typeof choice.finish_reason === 'string') finishReason = choice.finish_reason;
             const delta = choice.delta;
-            if (typeof delta?.content === 'string' && delta.content) {
+            if (delta === undefined) continue;
+            if (!isRecord(delta)) throw new LlmError('http', 'Invalid SSE delta.');
+            if (typeof delta.content === 'string' && delta.content) {
               content += delta.content;
               transport.onText?.(delta.content);
             }
-            for (const tc of delta?.tool_calls ?? []) {
-              const i = tc.index ?? 0;
+            if (delta.tool_calls === undefined) continue;
+            if (!Array.isArray(delta.tool_calls)) throw new LlmError('http', 'Invalid SSE tool calls.');
+            const calls: unknown[] = delta.tool_calls;
+            for (const tc of calls) {
+              if (!isRecord(tc) || (tc.index !== undefined && (!Number.isInteger(tc.index) || Number(tc.index) < 0))) {
+                throw new LlmError('http', 'Invalid SSE tool call index.');
+              }
+              const i = typeof tc.index === 'number' ? tc.index : 0;
               const slot = slots.get(i) ?? { id: '', name: '', args: '' };
-              if (tc.id) slot.id = tc.id;
-              if (tc.function?.name) slot.name += tc.function.name;
-              if (tc.function?.arguments) slot.args += tc.function.arguments;
+              if (typeof tc.id === 'string') slot.id = tc.id;
+              if (tc.function !== undefined && !isRecord(tc.function)) throw new LlmError('http', 'Invalid SSE function.');
+              if (isRecord(tc.function)) {
+                if (typeof tc.function.name === 'string') slot.name += tc.function.name;
+                if (typeof tc.function.arguments === 'string') slot.args += tc.function.arguments;
+              }
               slots.set(i, slot);
             }
           }
         }
       } catch (e) {
+        if (signal?.aborted) throw signal.reason;
+        if (controller.signal.reason instanceof LlmError) throw controller.signal.reason;
         if (controller.signal.aborted && !(e instanceof LlmError)) {
           throw new LlmError('network', `The endpoint stopped sending data for ${IDLE_TIMEOUT_MS / 1000}s — gave up waiting.`);
         }
         throw e;
       } finally {
-        clearTimeout(watchdog);
+        cleanup();
+      }
+      if (finishReason !== 'stop' && finishReason !== 'tool_calls') {
+        throw new LlmError('http', finishReason
+          ? `The endpoint could not complete the response (${finishReason}).`
+          : 'The endpoint closed the stream before completing the response. Please retry.');
       }
 
       const toolCalls: ToolCallRequest[] = [...slots.entries()]

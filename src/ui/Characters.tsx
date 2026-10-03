@@ -1,17 +1,10 @@
-import { useEffect, useState } from 'preact/hooks';
+import { useEffect, useRef, useState } from 'preact/hooks';
 import { browser } from 'wxt/browser';
+import type { Browser } from 'wxt/browser';
 import { getTokens } from '../bungie/auth';
-import {
-  charactersFromSnapshot,
-  getCachedSnapshot,
-  getSnapshot,
-  type CharacterRow,
-  type ProfileSnapshot,
-} from '../bungie/profile';
-
-// Set once the snapshot has been fetched this browser session, so the panel
-// refreshes on first open only (storage.session is cleared on browser exit).
-const SESSION_KEY = 'profileFetchedThisSession';
+import { charactersFromSnapshot, getSnapshot } from '../bungie/profile';
+import type { CharacterRow } from '../bungie/profile';
+import { isRecord } from '../type-guards';
 
 export function Characters() {
   const [signedIn, setSignedIn] = useState(false);
@@ -19,72 +12,60 @@ export function Characters() {
   const [fetchedAt, setFetchedAt] = useState<number>();
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
+  const generation = useRef(0);
 
-  function apply(snapshot: ProfileSnapshot) {
-    setCharacters(charactersFromSnapshot(snapshot));
-    setFetchedAt(snapshot.fetchedAt);
-  }
-
-  async function refresh() {
+  async function refresh(force = true) {
+    const current = ++generation.current;
     setBusy(true);
     setError(undefined);
     try {
-      apply(await getSnapshot(true));
-      // Flag the session only on success — a failed fetch must not suppress
-      // the first-open auto-refresh for the rest of the session.
-      await browser.storage.session?.set({ [SESSION_KEY]: true }).catch(() => {});
+      const tokens = await getTokens();
+      if (current !== generation.current) return;
+      setSignedIn(!!tokens);
+      if (!tokens) return;
+      const snapshot = await getSnapshot(force);
+      if (current !== generation.current) return;
+      setCharacters(charactersFromSnapshot(snapshot));
+      setFetchedAt(snapshot.fetchedAt);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      if (current === generation.current) setError(e instanceof Error ? e.message : String(e));
     } finally {
-      setBusy(false);
+      if (current === generation.current) setBusy(false);
     }
-  }
-
-  async function init() {
-    if (!(await getTokens())) {
-      setSignedIn(false);
-      setCharacters([]);
-      setFetchedAt(undefined);
-      return;
-    }
-    setSignedIn(true);
-    const cached = await getCachedSnapshot();
-    if (cached) apply(cached.snapshot);
-    const flagged = (await browser.storage.session?.get(SESSION_KEY).catch(() => undefined))?.[
-      SESSION_KEY
-    ];
-    if (!flagged) await refresh();
   }
 
   useEffect(() => {
-    init();
-    // Reflect login/logout from the Settings panel without coupling state.
-    const onChanged = (changes: Record<string, unknown>, area: string) => {
-      if (area === 'local' && 'bungieTokens' in changes) init();
+    void refresh(false);
+    const onChanged = (changes: Record<string, Browser.storage.StorageChange>, area: string) => {
+      const change = changes.bungieTokens;
+      if (area !== 'local' || !change) return;
+      const previous = isRecord(change.oldValue) ? change.oldValue.sessionId : undefined;
+      const next = isRecord(change.newValue) ? change.newValue.sessionId : undefined;
+      if (previous === next) return;
+      generation.current++;
+      setCharacters([]);
+      setFetchedAt(undefined);
+      setError(undefined);
+      setSignedIn(false);
+      void refresh(false);
     };
     browser.storage.onChanged.addListener(onChanged);
-    return () => browser.storage.onChanged.removeListener(onChanged);
+    return () => {
+      generation.current++;
+      browser.storage.onChanged.removeListener(onChanged);
+    };
   }, []);
 
   if (!signedIn) return null;
-
   return (
     <section>
       <h2>Characters</h2>
       {characters.length > 0 && (
-        <ul>
-          {characters.map((c) => (
-            <li key={c.id}>
-              {c.className} — {c.light}
-            </li>
-          ))}
-        </ul>
+        <ul>{characters.map((c) => <li key={c.id}>{c.className} — {c.light} — {c.id}</li>)}</ul>
       )}
       <p>
         {fetchedAt ? `Last refreshed ${formatAge(fetchedAt)}` : 'No snapshot yet.'}{' '}
-        <button disabled={busy} onClick={refresh}>
-          Refresh
-        </button>
+        <button disabled={busy} onClick={() => refresh()}>Refresh</button>
       </p>
       {busy && <p>Refreshing…</p>}
       {error && <p role="alert">{error}</p>}

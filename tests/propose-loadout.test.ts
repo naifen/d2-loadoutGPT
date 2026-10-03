@@ -7,15 +7,17 @@
 import { expect, test } from 'vitest';
 import { runAgentTurn } from '../src/agent/runner';
 import type { AssistantTurn, LLMTransport } from '../src/agent/transport';
+import type { TurnResult } from '../src/agent/runner';
 import type { Manifest } from '../src/bungie/manifest';
 import type { ProfileSnapshot } from '../src/bungie/profile';
+import { BUCKET_HASHES, ITEM_TYPES } from '../src/bungie/constants';
 import { createFixtureManifest, HASH } from './fixtures/manifest';
 import { createFixtureSnapshot } from './fixtures/snapshot';
 
 const VALID_ARGS = {
   name: 'Solar Titan Bonk',
   classType: 'titan',
-  items: ['w1', 'w3', 'a1', 'a2'],
+  items: ['w1', 'w3', 'a1', 'a2', 'energy', 'chest', 'legs', 'classitem'],
   subclass: {
     instanceId: 's1',
     socketOverrides: {
@@ -23,6 +25,7 @@ const VALID_ARGS = {
       '5': HASH.aspectConsecration,
       '7': HASH.fragTorches,
       '8': HASH.fragWonder,
+      '6': HASH.aspectSol,
     },
   },
   mods: [HASH.modGrenadeKickstart, HASH.modBomber],
@@ -34,13 +37,28 @@ async function run(
   deps: { snapshot?: ProfileSnapshot; manifest?: Manifest } = {},
 ) {
   const script = [...turns];
+  const snapshot = deps.snapshot ?? createFixtureSnapshot();
+  const base = deps.manifest ?? createFixtureManifest();
+  const slots = ['energy', 'chest', 'legs', 'classitem'] as const;
+  const extra = slots.map((slot, index) => ({
+    hash: 7000 + index, index: 7000 + index, displayProperties: { name: slot, description: '' },
+    itemType: slot === 'energy' ? ITEM_TYPES.weapon : ITEM_TYPES.armor,
+    classType: 0, equippingBlock: { equipmentSlotTypeHash: BUCKET_HASHES[slot] },
+  }));
+  snapshot.profileInventory!.data.items.push(...extra.map((def, index) => ({
+    itemHash: def.hash, itemInstanceId: slots[index]!, quantity: 1,
+    bucketHash: def.equippingBlock.equipmentSlotTypeHash, location: 2, transferStatus: 0, state: 0,
+  })));
+  const manifest: Manifest = {
+    ...base, getItem: async (hash) => extra.find((def) => def.hash === hash) ?? base.getItem(hash),
+  };
   const transport: LLMTransport = {
     complete: async () => script.shift() ?? { content: 'script exhausted' },
   };
   return runAgentTurn({
     transport,
-    snapshot: deps.snapshot ?? createFixtureSnapshot(),
-    manifest: deps.manifest ?? createFixtureManifest(),
+    snapshot,
+    manifest,
     messages: [{ role: 'user', content: 'build me a solar titan GM loadout' }],
   });
 }
@@ -49,7 +67,7 @@ const proposeCall = (id: string, args: Record<string, unknown>): AssistantTurn =
   toolCalls: [{ id, name: 'propose_loadout', arguments: JSON.stringify(args) }],
 });
 
-const toolResults = (result: Awaited<ReturnType<typeof run>>) =>
+const toolResults = (result: TurnResult) =>
   result.messages.filter((m) => m.role === 'tool').map((m) => JSON.parse(m.content as string));
 
 // ---------------------------------------------------------------------------
@@ -58,7 +76,8 @@ test('a valid proposal ends the turn with the DIM loadout URL, id: query and bui
   const result = await run([proposeCall('p1', VALID_ARGS)]);
 
   expect(result.status).toBe('proposed');
-  const out = result.toolOutput as { name: string; url: string; query: string; card: string };
+  if (result.status !== 'proposed') throw new Error('Expected proposed loadout');
+  const out = result.toolOutput;
   expect(out.name).toBe('Solar Titan Bonk');
 
   const url = new URL(out.url);
@@ -80,18 +99,23 @@ test('a valid proposal ends the turn with the DIM loadout URL, id: query and bui
     { id: 'w3', hash: HASH.linecutter },
     { id: 'a1', hash: HASH.aionHelmet },
     { id: 'a2', hash: HASH.aionGauntlets },
+    { id: 'energy', hash: 7000 },
+    { id: 'chest', hash: 7001 },
+    { id: 'legs', hash: 7002 },
+    { id: 'classitem', hash: 7003 },
     {
       hash: HASH.sunbreaker,
       socketOverrides: {
         '0': HASH.supBurning,
         '5': HASH.aspectConsecration,
+        '6': HASH.aspectSol,
         '7': HASH.fragTorches,
         '8': HASH.fragWonder,
       },
     },
   ]);
 
-  expect(out.query).toBe('id:w1 or id:w3 or id:a1 or id:a2');
+  expect(out.query).toBe('id:w1 or id:w3 or id:a1 or id:a2 or id:energy or id:chest or id:legs or id:classitem');
 
   // Card = model notes + the runner-appended item list.
   expect(out.card).toContain('Burning Maul uptime plus Sunspots');
@@ -247,4 +271,75 @@ test('a fragment absent from the player plug sets is rejected when live plug dat
   expect(first.error).toBeTruthy();
   expect(first.problems.join('\n')).toContain('socket 8');
   expect(first).not.toHaveProperty('url');
+});
+
+test.each([
+  ['missing equipment', { ...VALID_ARGS, items: ['w1'] }, 'equipment slot'],
+  ['retained aspect duplicate', { ...VALID_ARGS, subclass: { instanceId: 's1', socketOverrides: { '5': HASH.aspectRoaring } } }, 'both socket'],
+  ['numeric string plug', { ...VALID_ARGS, subclass: { instanceId: 's1', socketOverrides: { '0': String(HASH.supBurning) } } }, 'plug item hash'],
+  ['aliased socket index', { ...VALID_ARGS, subclass: { instanceId: 's1', socketOverrides: { '00': HASH.supBurning } } }, 'socket index'],
+  ['numeric string mod', { ...VALID_ARGS, mods: [String(HASH.modBomber)] }, 'item hashes'],
+  ['too many mods', { ...VALID_ARGS, mods: [HASH.modBomber, HASH.modBomber, HASH.modBomber] }, 'placed'],
+])('%s is rejected before emitting a DIM link', async (_label, args, message) => {
+  const result = await run([proposeCall('invalid', args), { content: 'correct it' }]);
+  expect(result.status).toBe('answer');
+  expect(toolResults(result)[0].problems.join('\n')).toContain(message);
+  expect(toolResults(result)[0]).not.toHaveProperty('url');
+});
+
+test('static subclass possibilities cannot stand in for live unlocked options', async () => {
+  const snapshot = createFixtureSnapshot();
+  delete snapshot.itemComponents!.reusablePlugs!.data.s1!.plugs['0'];
+  const base = createFixtureManifest();
+  const manifest: Manifest = {
+    ...base,
+    getItem: async (hash) => {
+      const def = await base.getItem(hash);
+      if (hash !== HASH.sunbreaker || !def?.sockets?.socketEntries) return def;
+      return { ...def, sockets: { ...def.sockets, socketEntries: def.sockets.socketEntries.map((entry, index) =>
+        index ? entry : { ...entry, reusablePlugItems: [{ plugItemHash: HASH.supBurning }] }) } };
+    },
+  };
+  const result = await run([proposeCall('p', VALID_ARGS), { content: 'no unlock proof' }], { snapshot, manifest });
+  expect(result.status).toBe('answer');
+  expect(toolResults(result)[0].problems.join('\n')).toContain('socket 0');
+});
+
+test('a terminal tool batch preserves one response per requested call for follow-up turns', async () => {
+  const result = await run([{
+    toolCalls: [
+      { id: 'proposal', name: 'propose_loadout', arguments: JSON.stringify(VALID_ARGS) },
+      { id: 'trailing', name: 'get_characters', arguments: '{}' },
+    ],
+  }]);
+  expect(result.status).toBe('proposed');
+  expect(result.messages.filter((m) => m.role === 'tool').map((m) => m.tool_call_id))
+    .toEqual(['proposal', 'trailing']);
+  expect(toolResults(result)[1].error).toContain('not executed');
+});
+
+test('subclass ownership is tied to a real character of the requested class', async () => {
+  const snapshot = createFixtureSnapshot();
+  const character = Object.values(snapshot.characters!.data).find((c) => c.classType === 0)!;
+  character.classType = 1;
+  const result = await run([proposeCall('p', VALID_ARGS), { content: 'wrong owner' }], { snapshot });
+  expect(toolResults(result)[0].problems.join('\n')).toContain('belong to a character');
+});
+
+test('mod assignment respects selected armor energy capacity', async () => {
+  const snapshot = createFixtureSnapshot();
+  for (const id of ['a1', 'a2']) snapshot.itemComponents!.instances!.data[id]!.energy = {
+    energyTypeHash: 0, energyType: 0, energyCapacity: 0, energyUsed: 0, energyUnused: 0,
+  };
+  const base = createFixtureManifest();
+  const manifest: Manifest = {
+    ...base,
+    getItem: async (hash) => {
+      const def = await base.getItem(hash);
+      return def && [HASH.modBomber, HASH.modGrenadeKickstart].some((h) => h === hash)
+        ? { ...def, plug: { ...def.plug, energyCost: { energyCost: 1 } } } : def;
+    },
+  };
+  const result = await run([proposeCall('p', VALID_ARGS), { content: 'over budget' }], { snapshot, manifest });
+  expect(toolResults(result)[0].problems.join('\n')).toContain('energy capacity');
 });

@@ -64,6 +64,12 @@ matching `.env.chrome` / `.env.firefox`. Keys can be regenerated on the same pag
 There is no server-side revoke; users manage authorized apps at
 <https://www.bungie.net/en/Profile/Settings> → "Authorized Applications".
 
+Logout clears the mounted chat, profile cache, tokens, and session refresh flag.
+Account-owned writes are serialized with logout across panels; late OAuth, refresh,
+profile, and chat completions cannot restore a logged-out session.
+Updating from the earlier development build requires one fresh Bungie login;
+history from an unowned or signed-out session is not restored.
+
 ## LLM settings
 
 The assistant talks to any **OpenAI-compatible chat-completions endpoint** that supports
@@ -81,6 +87,16 @@ The model must support **function/tool calling** — the assistant drives vault 
 subclass/artifact lookups through tools, and the panel shows a distinct error when the
 endpoint or model can't. Chat history lives in session storage and clears on browser
 close; "New conversation" clears it on demand.
+
+Remote endpoints must use **HTTPS**; HTTP is allowed for loopback addresses only
+(`localhost`, `127.0.0.1`, or `[::1]`). Base URLs cannot contain embedded credentials,
+queries, or fragments. Redirects are rejected so keys and conversations never follow
+an endpoint to an unconfigured URL. Enter the final API base URL directly.
+
+Each completion has a 60-second idle timeout, a 10-minute overall deadline, and an
+8 MiB response limit. Interrupted, malformed, or incomplete streams fail visibly
+rather than becoming partial tool calls. Agent turns stop after 12 tool rounds or
+64 total tool calls. **New conversation** cancels an active turn and clears its context.
 
 Because the base URL is user-configured (including `http://localhost:*`), the manifest
 requests `<all_urls>` host permission — a fixed list can't cover arbitrary endpoints.
@@ -108,11 +124,17 @@ The extension still only ever contacts Bungie.net plus the endpoint you configur
    query** puts the `id:` query there — paste it into DIM's search box to
    highlight exactly the items in the build.
 
+Build-card Markdown is sanitized before rendering. Scripts, embedded images, and
+unsafe link schemes are removed; external links open without access to the panel.
+Manifest updates publish a new IndexedDB generation only after every table is ready;
+a failed update leaves the previous complete generation intact.
+
 ## Manual end-to-end checklist
 
-The automated suite covers the agent turn runner only; everything else is
-verified by hand. Run this in **both** browsers (`pnpm build` →
-`.output/chrome-mv3`, `pnpm build:firefox` → `.output/firefox-mv2`):
+The automated suite covers the agent turn runner, profile helpers, and SSE transport
+boundaries. OAuth and live provider/DIM integration still require this checklist.
+Run this in **both** browsers: `pnpm build` → `.output/chrome-mv3`,
+`pnpm build:firefox` → `.output/firefox-mv2`.
 
 - [ ] Load the unpacked extension; the toolbar button opens the side panel (Chrome) / sidebar (Firefox).
 - [ ] **Log in with Bungie** completes the OAuth flow and shows your Bungie name and characters.
@@ -124,6 +146,9 @@ verified by hand. Run this in **both** browsers (`pnpm build` →
 - [ ] **Open in DIM** opens a new tab on `app.destinyitemmanager.com` with the loadout drawer populated; Apply works inside DIM.
 - [ ] Asking for an exotic you don't own produces a text answer naming an owned alternative — no dead end.
 - [ ] Closing and reopening the panel keeps the conversation; restarting the browser clears it.
+- [ ] Log out during a pending turn/refresh; account data disappears and late completions cannot restore it.
+- [ ] Start **New conversation** during a streamed reply; the old turn stops and cannot reappear.
+- [ ] An HTTP remote endpoint is rejected; a loopback HTTP model remains usable.
 
 ## Extension IDs and OAuth redirect URLs
 
@@ -162,8 +187,8 @@ printf 'd2-loadoutgpt@naifen.github.io' | shasum -a 1
 entrypoints/   WXT entrypoints: background.ts, sidepanel/
 src/ui/        Preact components for the side panel
 src/bungie/    OAuth, API client, profile snapshot, manifest
-src/agent/     agent turn runner and tools
+src/agent/     turn runner, read tools, shared item/socket context, validated DIM proposals
 src/llm/       OpenAI-compatible transport (SSE + tool calls)
-src/storage/   thin wrappers for local/session storage keys
+src/storage/   account-scoped session history and local LLM settings
 tests/         Vitest specs and fixtures
 ```

@@ -4,14 +4,10 @@
 // terminal tool.
 
 import type { Manifest } from '../bungie/manifest';
-import { charactersFromSnapshot, type ProfileSnapshot } from '../bungie/profile';
+import { charactersFromSnapshot } from '../bungie/profile';
+import type { ProfileSnapshot } from '../bungie/profile';
 
-/**
- * Name of the terminal tool that delivers a finished build. Implemented by
- * ticket #7 — the prompt references it today so the model knows the contract;
- * #7 registers the matching schema/executor in AGENT_TOOLS and the runner
- * stops on its terminal result.
- */
+/** Name of the terminal tool that delivers a validated build. */
 export const PROPOSE_LOADOUT_TOOL_NAME = 'propose_loadout';
 
 export async function buildSystemPrompt(

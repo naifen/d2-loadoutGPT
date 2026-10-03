@@ -6,11 +6,11 @@
 export const CLASS_NAMES = ['Titan', 'Hunter', 'Warlock', 'Unknown'] as const;
 
 /** Class name -> DestinyClass value, for tool arguments. */
-export const CLASS_TYPES: Record<string, number> = {
+export const CLASS_TYPES: Record<string, number> = Object.assign(Object.create(null), {
   titan: 0,
   hunter: 1,
   warlock: 2,
-};
+});
 
 /** DamageType enum value -> display name (3 is enum-named "Thermal" = Solar). */
 export const DAMAGE_TYPE_NAMES: Record<number, string> = {
@@ -40,7 +40,8 @@ export const BUCKET_HASHES = {
 
 /** Bucket hash for a friendly name (undefined for names not in the map). */
 export function bucketHashFor(name: string): number | undefined {
-  return (BUCKET_HASHES as Record<string, number>)[name.toLowerCase()];
+  const key = name.toLowerCase();
+  return Object.hasOwn(BUCKET_HASHES, key) ? BUCKET_HASHES[key as keyof typeof BUCKET_HASHES] : undefined;
 }
 
 /** Bucket hash -> friendly name (inverse of BUCKET_HASHES). */
