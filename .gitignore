@@ -1,0 +1,52 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Env & secrets
+.env
+.env.*
+!.env.example
+
+# Node
+node_modules/
+dist/
+build/
+coverage/
+*.tsbuildinfo
+.pnpm-store/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Logs & scratch
+*.log
+logs/
+.scratch/
+
+# Agent tool local state
+# (shared config like AGENTS.md, CLAUDE.md, .devin/, .agents/ stays committed)
+.claude/
+.cursor/
+.cursorignore
+.aider*
+.continue/
+.codeium/
+.windsurf/
+.codex/
+.gemini/
+.opencode/
+.factory/
+CLAUDE.local.md
+AGENTS.local.md
