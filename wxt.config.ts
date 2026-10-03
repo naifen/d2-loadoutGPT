@@ -16,7 +16,12 @@ export default defineConfig({
     permissions: ['identity', 'storage'],
     host_permissions: ['https://www.bungie.net/*'],
     ...(browser === 'firefox'
-      ? { browser_specific_settings: { gecko: { id: FIREFOX_ID } } }
+      ? {
+          browser_specific_settings: {
+            // 115+ for browser.storage.session (first-open-per-session flag).
+            gecko: { id: FIREFOX_ID, strict_min_version: '115.0' },
+          },
+        }
       : { key: CHROME_KEY }),
   }),
 });

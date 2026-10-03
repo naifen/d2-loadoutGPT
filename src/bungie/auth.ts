@@ -45,7 +45,8 @@ export async function login(): Promise<BungieTokens> {
 }
 
 export async function logout(): Promise<void> {
-  await browser.storage.local.remove(STORAGE_KEY);
+  // Also drop the cached profile snapshot — it belongs to this account.
+  await browser.storage.local.remove([STORAGE_KEY, 'profileSnapshot']);
 }
 
 let refreshing: Promise<BungieTokens> | undefined;
