@@ -36,7 +36,12 @@ logs/
 .scratch/
 
 # Agent tool local state
-# (shared config like AGENTS.md, CLAUDE.md, .devin/, .agents/ stays committed)
+# (shared config like AGENTS.md, CLAUDE.md stays committed)
+.agents/
+.commandcode/
+.devin/
+.grok/
+.pi/
 .claude/
 .cursor/
 .cursorignore
@@ -47,6 +52,8 @@ logs/
 .codex/
 .gemini/
 .opencode/
+.agent/
+.dsh/
 .factory/
 CLAUDE.local.md
 AGENTS.local.md
