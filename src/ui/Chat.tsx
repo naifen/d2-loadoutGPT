@@ -85,7 +85,7 @@ function errorText(e: unknown): string {
   if (e instanceof LlmError) {
     switch (e.kind) {
       case 'auth':
-        return `${e.message} — check the API key in Settings.`;
+        return `${e.message} — check the API key under LLM endpoint in Settings.`;
       case 'rate-limit':
         return `${e.message} — wait ${e.retryAfterSeconds ? `~${e.retryAfterSeconds}s` : 'a moment'} and try again.`;
       case 'tools-unsupported':
@@ -183,7 +183,7 @@ export function Chat() {
       const [settings, tokens] = await Promise.all([getLlmSettings(), getTokens()]);
       if (!active()) return;
       if (!isLlmConfigured(settings)) {
-        return appendRow({ kind: 'notice', text: 'Set your LLM endpoint (base URL + model) in Settings above first.' });
+        return appendRow({ kind: 'notice', text: 'Set your LLM endpoint (base URL + model) first — expand LLM endpoint in Settings below.' });
       }
       if (!tokens) {
         return appendRow({ kind: 'notice', text: 'Log in with Bungie first — the assistant works from your inventory.' });
@@ -274,6 +274,13 @@ export function Chat() {
     <section class="chat">
       <h2>Loadout assistant</h2>
       <ul ref={listRef} class="chat-log">
+        {rows.length === 0 && !live && !running && (
+          <li class="chat-empty">
+            <p>
+              <em>Ask for a loadout — the assistant works from your inventory.</em>
+            </p>
+          </li>
+        )}
         {rows.map((row, i) => (
           <li key={i} class={`row row-${row.kind}`}>
             {renderRow(row)}

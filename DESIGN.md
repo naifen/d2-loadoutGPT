@@ -6,7 +6,9 @@ translucent surfaces, spaced-caps type, and one signature interaction. A player
 should feel they opened a surface that shipped with the game.
 
 Everything lives in `src/ui/app.css` as custom properties; components in
-`src/ui/` consume classes only — no inline styles, no other stylesheets.
+`src/ui/` consume classes only — no other stylesheets. The one exception is
+dynamic values that can't be a static class (the manifest progress width),
+which may be set inline.
 
 ## The world (tokens)
 
@@ -19,7 +21,6 @@ Palette, sampled from the game UI:
 | `--d2-tooltip` | `rgba(15,18,23,.92)` | build card body |
 | `--d2-border` / `--d2-border-faint` | `.25` / `.12` white | control borders / separators |
 | `--d2-separator` | `.07` white | hairline row rules |
-| `--d2-hover` / `--d2-selected` | `.15` / `.22` white | overlays |
 | `--d2-text` | `#b6bbb7` | body copy |
 | `--d2-heading` | `#fff` | headings, strong text |
 | `--d2-cream` | `#fcedd3` | alt-header cream, "You:" label, card subtitle |
@@ -60,8 +61,10 @@ text → gold fill, black text).
   never squeezed out.
 - **Chat log** — `.chat-log` owns the scroll (`overflow-y`), hairline
   separators between `.chat-log > li` rows. Composer is `flex:none`, pinned at
-  the bottom of the section. Empty log shows a one-line italic hint via
-  `:empty::before`.
+  the bottom of the section. Empty log renders an explicit `.chat-empty` hint
+  row — a `:empty` selector would be unreliable because `{live && …}` leaves an
+  empty text node when `live` is `''`, and engines disagree on whether that
+  defeats `:empty`.
 - **Objective rows** — activity entries are quiet italic lines; a drawn 1.5px
   SVG check in `--d2-xp` appears when done. "Thinking…" pulses opacity.
 - **BuildCard = the item tooltip** — `rgba(15,18,23,.92)` body, 1px

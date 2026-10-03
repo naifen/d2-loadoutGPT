@@ -94,7 +94,7 @@ export function Settings() {
 
   return (
     <section class="settings">
-      <h2>Bungie account</h2>
+      <h2>Settings</h2>
       <div class="account">
         {tokens ? (
           <p class="account-line">

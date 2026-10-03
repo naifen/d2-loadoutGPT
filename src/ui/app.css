@@ -9,13 +9,10 @@
   /* palette (sampled from the D2 menu UI) */
   --d2-ground: #12171d;
   --d2-surface: rgba(255, 255, 255, 0.05);
-  --d2-raised: rgba(24, 30, 37, 0.9);
   --d2-tooltip: rgba(15, 18, 23, 0.92);
   --d2-border: rgba(255, 255, 255, 0.25);
   --d2-border-faint: rgba(255, 255, 255, 0.12);
   --d2-separator: rgba(255, 255, 255, 0.07);
-  --d2-hover: rgba(255, 255, 255, 0.15);
-  --d2-selected: rgba(255, 255, 255, 0.22);
   --d2-fill: #ffffff;
   --d2-fill-text: #000000;
 
@@ -485,12 +482,8 @@ a:focus-visible {
   border-bottom: 0;
 }
 /* empty conversation — a quiet line that teaches the surface */
-.chat-log:empty::before {
-  content: 'Ask for a loadout — the assistant works from your inventory.';
-  display: block;
-  padding: 10px 0;
+.chat-log > li.chat-empty > p {
   font-size: 12px;
-  font-style: italic;
   color: var(--d2-dim);
 }
 .chat-log > li > p {
@@ -694,7 +687,6 @@ a:focus-visible {
   gap: 6px;
   padding: 6px 14px 12px;
 }
-.build-card .row-error,
 .build-card p[role='alert'] {
   padding: 0 14px 10px;
   color: var(--d2-danger-text);
