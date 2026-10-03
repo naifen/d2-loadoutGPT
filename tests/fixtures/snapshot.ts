@@ -214,6 +214,9 @@ export function createFixtureSnapshot(): ProfileSnapshot {
               socket(HASH.backupMag),
             ],
           },
+          a1: { sockets: [socket(HASH.modGrenadeKickstart)] },
+          a2: { sockets: [socket(HASH.modBomber)] },
+          a3: { sockets: [socket(HASH.modGrenadeKickstart)] },
           s1: {
             sockets: [
               socket(HASH.supHammer),

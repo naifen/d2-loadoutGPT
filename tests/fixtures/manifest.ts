@@ -15,6 +15,7 @@ import {
   ASPECT_SOCKET_CATEGORIES,
   BUCKET_HASHES,
   FRAGMENT_SOCKET_CATEGORIES,
+  ITEM_CATEGORY_HASHES,
   ITEM_TYPES,
   PERK_SOCKET_CATEGORIES,
   STAT_HASHES,
@@ -22,8 +23,8 @@ import {
   TIER_TYPES,
 } from '../../src/bungie/constants';
 
-const [INTRINSIC, WEAPON_PERKS, ARMOR_PERKS, WEAPON_MODS] = [
-  3956125808, 4241085061, 2518356196, 2685412949,
+const [INTRINSIC, WEAPON_PERKS, ARMOR_PERKS, WEAPON_MODS, ARMOR_MOD_SOCKETS] = [
+  3956125808, 4241085061, 2518356196, 2685412949, 590099826,
 ];
 const [SUPER_CAT, ABILITY_CAT, ASPECT_CAT, FRAGMENT_CAT] = [
   SUPER_SOCKET_CATEGORIES[0],
@@ -85,6 +86,9 @@ export const HASH = {
   rampage: 5114,
   backupMag: 5121,
   nightmarePayload: 5131,
+  // Armor mods (equippable in armor mod sockets)
+  modGrenadeKickstart: 5201,
+  modBomber: 5202,
   // Plug sets / item set / stats / socket types
   plugSetFragments: 9501,
   plugSetAspects: 9502,
@@ -178,6 +182,19 @@ const items: Record<number, DestinyInventoryItemDefinition> = Object.fromEntries
       classType: 0,
       inventory: { bucketTypeHash: BUCKET_HASHES.helmet, tierType: TIER_TYPES.legendary },
       equippingBlock: { equipmentSlotTypeHash: BUCKET_HASHES.helmet },
+      sockets: {
+        socketEntries: [
+          {
+            socketTypeHash: 92020,
+            plugSources: 2,
+            reusablePlugItems: [
+              { plugItemHash: HASH.modGrenadeKickstart },
+              { plugItemHash: HASH.modBomber },
+            ],
+          },
+        ],
+        socketCategories: [{ socketCategoryHash: ARMOR_MOD_SOCKETS, socketIndexes: [0] }],
+      },
     }),
     item({
       hash: HASH.aionGauntlets,
@@ -187,6 +204,19 @@ const items: Record<number, DestinyInventoryItemDefinition> = Object.fromEntries
       classType: 0,
       inventory: { bucketTypeHash: BUCKET_HASHES.arms, tierType: TIER_TYPES.legendary },
       equippingBlock: { equipmentSlotTypeHash: BUCKET_HASHES.arms },
+      sockets: {
+        socketEntries: [
+          {
+            socketTypeHash: 92020,
+            plugSources: 2,
+            reusablePlugItems: [
+              { plugItemHash: HASH.modGrenadeKickstart },
+              { plugItemHash: HASH.modBomber },
+            ],
+          },
+        ],
+        socketCategories: [{ socketCategoryHash: ARMOR_MOD_SOCKETS, socketIndexes: [0] }],
+      },
     }),
     item({
       hash: HASH.wildwoodVest,
@@ -196,6 +226,19 @@ const items: Record<number, DestinyInventoryItemDefinition> = Object.fromEntries
       classType: 1,
       inventory: { bucketTypeHash: BUCKET_HASHES.chest, tierType: TIER_TYPES.legendary },
       equippingBlock: { equipmentSlotTypeHash: BUCKET_HASHES.chest },
+      sockets: {
+        socketEntries: [
+          {
+            socketTypeHash: 92020,
+            plugSources: 2,
+            reusablePlugItems: [
+              { plugItemHash: HASH.modGrenadeKickstart },
+              { plugItemHash: HASH.modBomber },
+            ],
+          },
+        ],
+        socketCategories: [{ socketCategoryHash: ARMOR_MOD_SOCKETS, socketIndexes: [0] }],
+      },
     }),
     item({
       hash: HASH.sunbreaker,
@@ -274,6 +317,21 @@ const items: Record<number, DestinyInventoryItemDefinition> = Object.fromEntries
     plugItem(HASH.rampage, 'Rampage', 'Kills stack damage.', 'v400.weapons.perks'),
     plugItem(HASH.backupMag, 'Backup Mag', 'Bigger magazine.', 'v400.weapons.mods'),
     plugItem(HASH.nightmarePayload, 'Nightmare Payload', 'Exotic intrinsic perk.', 'v400.weapons.intrinsics'),
+    // Armor mods — real armor mod items carry ItemCategoryHashes.ArmorMods.
+    item({
+      hash: HASH.modGrenadeKickstart,
+      displayProperties: dp('Grenade Kickstart', 'Gain grenade energy when you use your grenade ability.'),
+      itemType: ITEM_TYPES.mod,
+      itemCategoryHashes: [ITEM_CATEGORY_HASHES.armorMods],
+      plug: { plugCategoryIdentifier: 'enhancements.armor' },
+    }),
+    item({
+      hash: HASH.modBomber,
+      displayProperties: dp('Bomber', 'Gain grenade energy when you use your class ability.'),
+      itemType: ITEM_TYPES.mod,
+      itemCategoryHashes: [ITEM_CATEGORY_HASHES.armorMods],
+      plug: { plugCategoryIdentifier: 'enhancements.armor' },
+    }),
     // Artifact perk items
     item({ hash: HASH.artAntiBarrier, displayProperties: dp('Anti-Barrier Rounds', 'Pierce Barrier champions.'), itemType: ITEM_TYPES.mod }),
     item({ hash: HASH.artUnstoppable, displayProperties: dp('Unstoppable Burst', 'Stagger Unstoppable champions.'), itemType: ITEM_TYPES.mod }),
@@ -311,6 +369,7 @@ const socketCategories = record([
   { hash: WEAPON_PERKS, displayProperties: dp('Weapon Perks'), categoryStyle: 1 },
   { hash: ARMOR_PERKS, displayProperties: dp('Armor Perks'), categoryStyle: 1 },
   { hash: WEAPON_MODS, displayProperties: dp('Weapon Mods'), categoryStyle: 2 },
+  { hash: ARMOR_MOD_SOCKETS, displayProperties: dp('Armor Mods'), categoryStyle: 1 },
   { hash: SUPER_CAT, displayProperties: dp('Super'), categoryStyle: 8 },
   { hash: ABILITY_CAT, displayProperties: dp('Abilities'), categoryStyle: 7 },
   { hash: ASPECT_CAT, displayProperties: dp('Aspects'), categoryStyle: 7 },

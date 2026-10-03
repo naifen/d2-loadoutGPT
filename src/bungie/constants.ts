@@ -76,6 +76,11 @@ export const TIER_TYPES = {
   exotic: 6,
 } as const;
 
+/** ItemCategoryHashes — marks armor mod inventory items (DIM's ArmorMods). */
+export const ITEM_CATEGORY_HASHES = {
+  armorMods: 4104513227,
+} as const;
+
 /** ItemState bitmask flags on DestinyItemComponent.state. */
 export const ITEM_STATE = {
   locked: 1,
