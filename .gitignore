@@ -50,3 +50,7 @@ logs/
 .factory/
 CLAUDE.local.md
 AGENTS.local.md
+
+# WXT
+.output/
+.wxt/

@@ -1,0 +1,83 @@
+# d2-loadoutGPT
+
+A Destiny 2 loadout assistant that lives in a Chrome side panel / Firefox sidebar.
+It logs into Bungie with its own OAuth flow, keeps a local snapshot of your characters,
+vault, and the Destiny manifest, and lets an LLM (any OpenAI-compatible endpoint) build
+loadouts from your actual items. Finished builds are handed off to
+[DIM](https://app.destinyitemmanager.com) as a loadout link plus an `id:` search query.
+
+Built with [WXT](https://wxt.dev), Preact, and TypeScript. MIT licensed. Sideload only.
+
+## Development
+
+Requires Node 22+ and pnpm.
+
+```sh
+pnpm install
+pnpm typecheck        # tsc --noEmit
+pnpm test             # vitest
+pnpm build            # Chrome MV3  -> .output/chrome-mv3/
+pnpm build:firefox    # Firefox MV2 -> .output/firefox-mv2/
+pnpm dev              # Chrome dev build with HMR (pnpm dev:firefox for Firefox)
+```
+
+Load unpacked: Chrome `chrome://extensions` -> Developer mode -> Load unpacked -> `.output/chrome-mv3`.
+Firefox `about:debugging#/runtime/this-firefox` -> Load Temporary Add-on -> `.output/firefox-mv2/manifest.json`.
+Clicking the toolbar button opens the side panel / sidebar.
+
+### Environment
+
+Copy `.env.example` to `.env.chrome` and `.env.firefox` and fill in the Bungie app credentials.
+WXT loads `.env.<browser>` for the matching build target (`pnpm build` / `pnpm build:chrome`
+reads `.env.chrome`, `pnpm build:firefox` reads `.env.firefox`), so each browser gets its own
+Bungie app. `.env.*` files are gitignored; only `.env.example` is committed. Variables:
+
+| Variable                   | Purpose                           |
+| -------------------------- | --------------------------------- |
+| `WXT_BUNGIE_API_KEY`       | Bungie API key                    |
+| `WXT_BUNGIE_CLIENT_ID`     | OAuth client id (Confidential)    |
+| `WXT_BUNGIE_CLIENT_SECRET` | OAuth client secret               |
+
+Access them in code via `import.meta.env.WXT_BUNGIE_API_KEY` etc.
+
+## Extension IDs and OAuth redirect URLs
+
+Bungie allows one redirect URL per app, and Chrome and Firefox use different redirect hosts,
+so there is one Bungie app per browser. The extension ID is pinned per browser so the redirect
+URL does not change between rebuilds or reinstalls.
+
+| Browser | Pinned by                                             | Extension ID                       | `identity.launchWebAuthFlow` redirect URL                               |
+| ------- | ----------------------------------------------------- | ---------------------------------- | ----------------------------------------------------------------------- |
+| Chrome  | `key` in `wxt.config.ts`                              | `godlpcbbbcibenblemaffmgpolkjobgp` | `https://godlpcbbbcibenblemaffmgpolkjobgp.chromiumapp.org/`             |
+| Firefox | `browser_specific_settings.gecko.id` in `wxt.config.ts` | `d2-loadoutgpt@naifen.github.io`   | `https://ef06e5df905092e1d06c37ab01bb8c3390ca9099.extensions.allizom.org/` |
+
+Register the matching redirect URL in each Bungie app (origin header `*`).
+
+**Chrome.** The ID is derived from the RSA public key in the manifest `key` field. The private
+half of the keypair is **not** in this repo; it lives at
+`/Users/jg/Repos/.worktrees/d2-loadoutGPT-notes/chrome-extension-key.pem` on the maintainer's
+machine. It is only needed to pack a `.crx`; unpacked loads use the manifest `key` alone.
+To re-derive the ID from the private key:
+
+```sh
+openssl rsa -in chrome-extension-key.pem -pubout -outform DER | shasum -a 256 | head -c 32 | tr '0-9a-f' 'a-p'
+```
+
+**Firefox.** `browser.identity.getRedirectURL()` returns `https://<sha1(gecko.id)>.extensions.allizom.org/`.
+Either read it at runtime (open the sidebar, run `browser.identity.getRedirectURL()` in the
+extension's console from `about:debugging` -> Inspect) or compute it:
+
+```sh
+printf 'd2-loadoutgpt@naifen.github.io' | shasum -a 1
+```
+
+## Layout
+
+```
+entrypoints/   WXT entrypoints: background.ts, sidepanel/
+src/ui/        Preact components for the side panel
+src/bungie/    OAuth, API client, profile snapshot, manifest (planned)
+src/agent/     agent turn runner and tools (planned)
+src/llm/       OpenAI-compatible transport (planned)
+tests/         Vitest specs and fixtures
+```
