@@ -40,6 +40,30 @@ Bungie app. `.env.*` files are gitignored; only `.env.example` is committed. Var
 
 Access them in code via `import.meta.env.WXT_BUNGIE_API_KEY` etc.
 
+## Register your Bungie app
+
+The extension talks to Bungie with its own OAuth credentials. Register at
+<https://www.bungie.net/en/Application> — **one app per browser**, because Bungie allows a
+single redirect URL per app and Chrome/Firefox use different redirect hosts (see
+"Extension IDs and OAuth redirect URLs" below).
+
+For each app (Chrome and Firefox):
+
+- **OAuth Client Type**: `Confidential` — required for refresh tokens (Public clients get none).
+- **Redirect URL**: exactly that browser's redirect URL from the table below — the string
+  `browser.identity.getRedirectURL()` returns, trailing `/` included. It must be `https`.
+- **Scope**: tick `ReadBasicUserProfile` (account/membership lookup) and
+  `ReadDestinyInventoryAndVault` (profile, vault, progression). Do not tick
+  `MoveEquipDestinyItems`; this extension never writes to your account.
+- **Origin Header**: `*` — the extension's `Origin:` is `chrome-extension://…` /
+  `moz-extension://…`, and anything narrower fails Bungie's Origin check
+  (`OriginHeaderDoesNotMatchKey`).
+
+After saving, copy **API Key**, **OAuth client_id**, and **OAuth client_secret** into the
+matching `.env.chrome` / `.env.firefox`. Keys can be regenerated on the same page if leaked.
+There is no server-side revoke; users manage authorized apps at
+<https://www.bungie.net/en/Profile/Settings> → "Authorized Applications".
+
 ## Extension IDs and OAuth redirect URLs
 
 Bungie allows one redirect URL per app, and Chrome and Firefox use different redirect hosts,
