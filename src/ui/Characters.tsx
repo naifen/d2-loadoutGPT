@@ -58,16 +58,29 @@ export function Characters() {
 
   if (!signedIn) return null;
   return (
-    <section>
+    <section class="characters">
       <h2>Characters</h2>
       {characters.length > 0 && (
-        <ul>{characters.map((c) => <li key={c.id}>{c.className} — {c.light} — {c.id}</li>)}</ul>
+        <ul class="char-list">
+          {characters.map((c) => (
+            <li key={c.id}>
+              <span class="char-name">{c.className}</span>
+              <span class="char-power">
+                <svg viewBox="0 0 10 10" aria-hidden="true">
+                  <path d="M5 0.8L9.2 5L5 9.2L0.8 5Z" fill="none" stroke="currentColor" stroke-width="1.5" />
+                </svg>
+                {c.light}
+              </span>
+              <span class="char-id">{c.id}</span>
+            </li>
+          ))}
+        </ul>
       )}
-      <p>
+      <p class="char-meta">
         {fetchedAt ? `Last refreshed ${formatAge(fetchedAt)}` : 'No snapshot yet.'}{' '}
-        <button disabled={busy} onClick={() => refresh()}>Refresh</button>
+        <button class="btn" disabled={busy} onClick={() => refresh()}>Refresh</button>
       </p>
-      {busy && <p>Refreshing…</p>}
+      {busy && <p class="busy-note">Refreshing…</p>}
       {error && <p role="alert">{error}</p>}
     </section>
   );

@@ -271,27 +271,27 @@ export function Chat() {
   }
 
   return (
-    <section>
+    <section class="chat">
       <h2>Loadout assistant</h2>
-      <ul
-        ref={listRef}
-        style={{ listStyle: 'none', padding: 0, maxHeight: '24em', overflowY: 'auto' }}
-      >
+      <ul ref={listRef} class="chat-log">
         {rows.map((row, i) => (
-          <li key={i}>{renderRow(row)}</li>
+          <li key={i} class={`row row-${row.kind}`}>
+            {renderRow(row)}
+          </li>
         ))}
         {live && (
-          <li>
-            <em style={{ whiteSpace: 'pre-wrap' }}>{live}</em>
+          <li class="row row-live">
+            <em>{live}</em>
           </li>
         )}
         {running && !live && (
-          <li>
+          <li class="row row-thinking">
             <em>Thinking…</em>
           </li>
         )}
       </ul>
       <form
+        class="composer"
         onSubmit={(e) => {
           e.preventDefault();
           send();
@@ -303,12 +303,15 @@ export function Chat() {
           disabled={running || !manifestReady || !historyReady}
           placeholder="e.g. Solar Titan for a Grandmaster Nightfall"
           aria-label="Loadout request"
-          style={{ width: '70%' }}
         />
-        <button type="submit" disabled={running || !manifestReady || !historyReady || !input.trim()}>
+        <button
+          class="btn"
+          type="submit"
+          disabled={running || !manifestReady || !historyReady || !input.trim()}
+        >
           Send
-        </button>{' '}
-        <button type="button" onClick={newConversation}>
+        </button>
+        <button class="btn" type="button" onClick={newConversation}>
           New conversation
         </button>
       </form>
@@ -325,11 +328,16 @@ function renderRow(row: Row) {
         </p>
       );
     case 'assistant':
-      return <p style={{ whiteSpace: 'pre-wrap' }}>{row.text}</p>;
+      return <p>{row.text}</p>;
     case 'activity':
       return (
         <p>
-          <em>{row.done ? `✓ ${row.label.replace(/…$/, '')}` : row.label}</em>
+          {row.done && (
+            <svg class="icon-check" viewBox="0 0 12 12" aria-hidden="true">
+              <path d="M2 6.5l2.5 2.5L10 3.5" fill="none" stroke="currentColor" stroke-width="1.5" />
+            </svg>
+          )}
+          <em>{row.done ? row.label.replace(/…$/, '') : row.label}</em>
         </p>
       );
     case 'proposal':

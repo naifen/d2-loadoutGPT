@@ -93,84 +93,81 @@ export function Settings() {
   };
 
   return (
-    <section>
+    <section class="settings">
       <h2>Bungie account</h2>
-      {tokens ? (
-        <p>
-          Signed in as {name ?? `membership ${tokens.membershipId}`}{' '}
-          <button disabled={busy} onClick={() => run(logout)}>
-            Log out
+      <div class="account">
+        {tokens ? (
+          <p class="account-line">
+            Signed in as <strong>{name ?? `membership ${tokens.membershipId}`}</strong>{' '}
+            <button class="btn btn-danger" disabled={busy} onClick={() => run(logout)}>
+              Log out
+            </button>
+          </p>
+        ) : (
+          <button class="btn" disabled={busy} onClick={() => run(login)}>
+            Log in with Bungie
           </button>
-        </p>
-      ) : (
-        <button disabled={busy} onClick={() => run(login)}>
-          Log in with Bungie
-        </button>
-      )}
-      {error && <p role="alert">{error}</p>}
+        )}
+        {error && <p role="alert">{error}</p>}
+      </div>
 
-      <h2>LLM endpoint</h2>
-      <p>
-        Any OpenAI-compatible chat endpoint with tool calling. By default, the key stays
-        in memory until the browser restarts or the extension reloads, and is sent only to the
-        configured endpoint. Changing the endpoint origin clears the key.
-      </p>
-      <p>
-        <label>
-          Base URL{' '}
-          <input
-            value={llm.baseUrl}
-            onInput={setLlmField('baseUrl')}
-            placeholder="https://api.openai.com/v1"
-            size={32}
-          />
-        </label>
-      </p>
-      <p>
-        <label>
-          API key{' '}
-          <input
-            type="password"
-            value={llm.apiKey}
-            onInput={setLlmField('apiKey')}
-            placeholder="empty for local servers"
-            size={32}
-          />
-        </label>
-      </p>
-      <p>
-        <label>
-          <input
-            type="checkbox"
-            checked={llm.rememberKey}
-            onChange={(e) => {
-              setLlm({ ...llm, rememberKey: e.currentTarget.checked });
-              setLlmSaved(false);
-            }}
-            aria-describedby="remember-key-warning"
-          />{' '}
-          Remember key on this device
-        </label>
-        <br />
-        <small id="remember-key-warning">
-          Optional: saves the key unencrypted in your browser profile. Use only on a trusted device.
-        </small>
-      </p>
-      <p>
-        <label>
-          Model{' '}
-          <input
-            value={llm.model}
-            onInput={setLlmField('model')}
-            placeholder="e.g. gpt-4o-mini, qwen3:8b"
-            size={32}
-          />
-        </label>
-      </p>
-      <p>
-        <button onClick={saveLlm}>Save LLM settings</button>
-        {llmSaved && ' Saved.'}
-      </p>
+      <details class="disclosure">
+        <summary>LLM endpoint</summary>
+        <div class="disclosure-body">
+          <p class="hint">
+            Any OpenAI-compatible chat endpoint with tool calling. By default, the key stays
+            in memory until the browser restarts or the extension reloads, and is sent only to the
+            configured endpoint. Changing the endpoint origin clears the key.
+          </p>
+          <label class="field">
+            <span>Base URL</span>
+            <input
+              value={llm.baseUrl}
+              onInput={setLlmField('baseUrl')}
+              placeholder="https://api.openai.com/v1"
+            />
+          </label>
+          <label class="field">
+            <span>API key</span>
+            <input
+              type="password"
+              value={llm.apiKey}
+              onInput={setLlmField('apiKey')}
+              placeholder="empty for local servers"
+            />
+          </label>
+          <label class="field field-check">
+            <input
+              type="checkbox"
+              checked={llm.rememberKey}
+              onChange={(e) => {
+                setLlm({ ...llm, rememberKey: e.currentTarget.checked });
+                setLlmSaved(false);
+              }}
+              aria-describedby="remember-key-warning"
+            />
+            Remember key on this device
+          </label>
+          <p class="field-note" id="remember-key-warning">
+            Optional: saves the key unencrypted in your browser profile. Use only on a trusted
+            device.
+          </p>
+          <label class="field">
+            <span>Model</span>
+            <input
+              value={llm.model}
+              onInput={setLlmField('model')}
+              placeholder="e.g. gpt-4o-mini, qwen3:8b"
+            />
+          </label>
+          <p>
+            <button class="btn btn-confirm" onClick={saveLlm}>
+              Save LLM settings
+            </button>
+            {llmSaved && <span class="save-note">Saved.</span>}
+          </p>
+        </div>
+      </details>
     </section>
   );
 }

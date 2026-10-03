@@ -60,13 +60,22 @@ export function BuildCard({ proposal }: { proposal: LoadoutProposal }) {
   }
 
   return (
-    <div style={{ border: '1px solid #999', borderRadius: 4, padding: '0 0.75em 0.75em' }}>
-      <h3>{proposal.name}</h3>
-      <div dangerouslySetInnerHTML={{ __html: html }} />
-      <p>
-        <button onClick={openDim}>Open in DIM</button>{' '}
-        <button onClick={() => copy('link', proposal.url)}>{copied === 'link' ? 'Copied' : 'Copy DIM link'}</button>{' '}
-        <button onClick={() => copy('query', proposal.query)}>{copied === 'query' ? 'Copied' : 'Copy search query'}</button>
+    <div class="build-card">
+      <header class="build-card-head">
+        <h3>{proposal.name}</h3>
+        <p class="build-card-sub">Loadout proposal</p>
+      </header>
+      <div class="build-card-body" dangerouslySetInnerHTML={{ __html: html }} />
+      <p class="build-card-actions">
+        <button class="btn btn-gold" onClick={openDim}>
+          Open in DIM
+        </button>
+        <button class="btn" onClick={() => copy('link', proposal.url)}>
+          {copied === 'link' ? 'Copied' : 'Copy DIM link'}
+        </button>
+        <button class="btn" onClick={() => copy('query', proposal.query)}>
+          {copied === 'query' ? 'Copied' : 'Copy search query'}
+        </button>
       </p>
       {error && <p role="alert">{error}</p>}
     </div>

@@ -20,14 +20,23 @@ export function ManifestStatus() {
     return () => { active = false; };
   }, []);
 
-  if (state.phase === 'checking') return <p>Checking game definitions…</p>;
+  if (state.phase === 'checking') return <p class="manifest-status">Checking game definitions…</p>;
   if (state.phase === 'downloading') {
+    const pct = state.total > 0 ? Math.round((state.done / state.total) * 100) : 0;
     return (
-      <p>
+      <p class="manifest-status">
         Downloading definitions: {state.table} ({state.done}/{state.total})…
+        <span class="manifest-bar" aria-hidden="true">
+          <span style={{ width: `${pct}%` }} />
+        </span>
       </p>
     );
   }
-  if (state.phase === 'error') return <p role="alert">Manifest download failed: {state.message}</p>;
-  return <p>Manifest: {state.version}</p>;
+  if (state.phase === 'error')
+    return (
+      <p class="manifest-status is-error" role="alert">
+        Manifest download failed: {state.message}
+      </p>
+    );
+  return <p class="manifest-status">Manifest: {state.version}</p>;
 }
