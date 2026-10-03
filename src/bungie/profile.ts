@@ -6,6 +6,7 @@
 // cached JSON keeps everything Bungie sent.
 
 import { browser } from 'wxt/browser';
+import { CLASS_NAMES } from './constants';
 import { getTokens } from './auth';
 import { BungieError } from './errors';
 import { bungieFetch } from './http';
@@ -245,8 +246,6 @@ export interface CharacterRow {
   light: number;
   emblemPath: string;
 }
-
-const CLASS_NAMES = ['Titan', 'Hunter', 'Warlock'];
 
 /** Snapshot -> rows for the character list UI (also usable by get_characters). */
 export function charactersFromSnapshot(snapshot: ProfileSnapshot): CharacterRow[] {

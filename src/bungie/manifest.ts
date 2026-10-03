@@ -83,6 +83,9 @@ export interface DestinyInventoryItemDefinition {
     plugCategoryHash?: number;
     plugCategoryIdentifier?: string;
     isDummyPlug?: boolean;
+    /** Fragment sockets this aspect plug grants (aspects only). */
+    energyCapacity?: { capacityValue?: number };
+    /** Fragment slots this plug consumes (fragments only). */
     energyCost?: { energyCost?: number };
     insertionRules?: { failureMessage?: string }[];
   };
