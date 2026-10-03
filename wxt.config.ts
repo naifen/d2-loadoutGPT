@@ -14,7 +14,10 @@ export default defineConfig({
     description: 'Destiny 2 loadout assistant',
     action: { default_title: 'd2-loadoutGPT' },
     permissions: ['identity', 'storage'],
-    host_permissions: ['https://www.bungie.net/*'],
+    // <all_urls>: the LLM base URL is user-configured and arbitrary, including
+    // http://localhost:* (Ollama/LM Studio) — a fixed host list can't cover it.
+    // The extension still only ever fetches Bungie.net plus that one endpoint.
+    host_permissions: ['https://www.bungie.net/*', '<all_urls>'],
     ...(browser === 'firefox'
       ? {
           browser_specific_settings: {

@@ -15,6 +15,8 @@ import type { AssistantTurn, ChatMessage, LLMTransport } from './transport';
 export type AgentEvent =
   | { type: 'tool-call'; id: string; name: string; arguments: string }
   | { type: 'tool-result'; id: string; name: string; result: unknown }
+  /** One streamed assistant text fragment, forwarded from transport.onText. */
+  | { type: 'text-delta'; delta: string }
   | { type: 'text'; content: string };
 
 export interface TurnResult {
@@ -67,7 +69,20 @@ export async function runAgentTurn(options: RunAgentTurnOptions): Promise<TurnRe
 
   let iterations = 0;
   for (;;) {
-    const turn: AssistantTurn = await transport.complete(wire, TOOL_SCHEMAS);
+    // A streaming transport (src/llm) invokes its onText hook per text
+    // delta; forward those to the observer so the panel can render text as
+    // it arrives. Any hook the caller set still runs.
+    const previousOnText = transport.onText;
+    transport.onText = (delta) => {
+      previousOnText?.(delta);
+      onEvent?.({ type: 'text-delta', delta });
+    };
+    let turn: AssistantTurn;
+    try {
+      turn = await transport.complete(wire, TOOL_SCHEMAS);
+    } finally {
+      transport.onText = previousOnText;
+    }
 
     if (!turn.toolCalls?.length) {
       const content = turn.content ?? '';

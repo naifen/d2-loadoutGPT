@@ -64,6 +64,28 @@ matching `.env.chrome` / `.env.firefox`. Keys can be regenerated on the same pag
 There is no server-side revoke; users manage authorized apps at
 <https://www.bungie.net/en/Profile/Settings> → "Authorized Applications".
 
+## LLM settings
+
+The assistant talks to any **OpenAI-compatible chat-completions endpoint** that supports
+tool calling and SSE streaming. Configure it in the Settings panel (persisted in extension
+local storage; the API key is sent only to the configured base URL — nowhere else):
+
+| Provider   | Base URL                          | Notes                                          |
+| ---------- | --------------------------------- | ---------------------------------------------- |
+| OpenAI     | `https://api.openai.com/v1`       | Needs an API key and a tool-capable model.      |
+| OpenRouter | `https://openrouter.ai/api/v1`    | Reach Claude, Gemini, etc. with one key.        |
+| Ollama     | `http://localhost:11434/v1`       | No key. `ollama pull` a tool-capable model.     |
+| LM Studio  | `http://localhost:1234/v1`        | No key. Load a tool-capable model first.        |
+
+The model must support **function/tool calling** — the assistant drives vault search and
+subclass/artifact lookups through tools, and the panel shows a distinct error when the
+endpoint or model can't. Chat history lives in session storage and clears on browser
+close; "New conversation" clears it on demand.
+
+Because the base URL is user-configured (including `http://localhost:*`), the manifest
+requests `<all_urls>` host permission — a fixed list can't cover arbitrary endpoints.
+The extension still only ever contacts Bungie.net plus the endpoint you configure.
+
 ## Extension IDs and OAuth redirect URLs
 
 Bungie allows one redirect URL per app, and Chrome and Firefox use different redirect hosts,
@@ -100,8 +122,9 @@ printf 'd2-loadoutgpt@naifen.github.io' | shasum -a 1
 ```
 entrypoints/   WXT entrypoints: background.ts, sidepanel/
 src/ui/        Preact components for the side panel
-src/bungie/    OAuth, API client, profile snapshot, manifest (planned)
-src/agent/     agent turn runner and tools (planned)
-src/llm/       OpenAI-compatible transport (planned)
+src/bungie/    OAuth, API client, profile snapshot, manifest
+src/agent/     agent turn runner and tools
+src/llm/       OpenAI-compatible transport (SSE + tool calls)
+src/storage/   thin wrappers for local/session storage keys
 tests/         Vitest specs and fixtures
 ```
