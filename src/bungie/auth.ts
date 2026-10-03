@@ -1,4 +1,5 @@
 import { browser } from 'wxt/browser';
+import { clearChatHistory } from '../storage/chatHistory';
 import { BungieError } from './errors';
 
 const AUTHORIZE_URL = 'https://www.bungie.net/en/OAuth/Authorize';
@@ -45,8 +46,10 @@ export async function login(): Promise<BungieTokens> {
 }
 
 export async function logout(): Promise<void> {
-  // Also drop the cached profile snapshot — it belongs to this account.
+  // Also drop the cached profile snapshot and the chat history — a different
+  // account must not inherit this account's data.
   await browser.storage.local.remove([STORAGE_KEY, 'profileSnapshot']);
+  await clearChatHistory();
 }
 
 let refreshing: Promise<BungieTokens> | undefined;

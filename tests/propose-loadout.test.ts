@@ -7,6 +7,8 @@
 import { expect, test } from 'vitest';
 import { runAgentTurn } from '../src/agent/runner';
 import type { AssistantTurn, LLMTransport } from '../src/agent/transport';
+import type { Manifest } from '../src/bungie/manifest';
+import type { ProfileSnapshot } from '../src/bungie/profile';
 import { createFixtureManifest, HASH } from './fixtures/manifest';
 import { createFixtureSnapshot } from './fixtures/snapshot';
 
@@ -27,15 +29,18 @@ const VALID_ARGS = {
   notes: '## Why\nBurning Maul uptime plus Sunspots for GM survivability.',
 };
 
-async function run(turns: AssistantTurn[]) {
+async function run(
+  turns: AssistantTurn[],
+  deps: { snapshot?: ProfileSnapshot; manifest?: Manifest } = {},
+) {
   const script = [...turns];
   const transport: LLMTransport = {
     complete: async () => script.shift() ?? { content: 'script exhausted' },
   };
   return runAgentTurn({
     transport,
-    snapshot: createFixtureSnapshot(),
-    manifest: createFixtureManifest(),
+    snapshot: deps.snapshot ?? createFixtureSnapshot(),
+    manifest: deps.manifest ?? createFixtureManifest(),
     messages: [{ role: 'user', content: 'build me a solar titan GM loadout' }],
   });
 }
@@ -178,4 +183,68 @@ test('a mod hash that is not an armor mod returns a structured error', async () 
   const problems = toolResults(result)[0].problems.join('\n');
   expect(problems).toContain('Kill Clip');
   expect(problems).toContain('424242');
+});
+
+test('fragments costing more than the chosen aspects grant return a structured error', async () => {
+  // Ember of Wonder costs 5 slots here (fixture value is 2), so the chosen
+  // fragments outspend the chosen aspects' capacity of 3 + 3.
+  const base = createFixtureManifest();
+  const manifest: Manifest = {
+    ...base,
+    getItem: async (hash) => {
+      const def = await base.getItem(hash);
+      return hash === HASH.fragWonder && def
+        ? { ...def, plug: { ...def.plug, energyCost: { energyCost: 5 } } }
+        : def;
+    },
+  };
+  const result = await run(
+    [
+      proposeCall('p1', {
+        ...VALID_ARGS,
+        subclass: {
+          instanceId: 's1',
+          socketOverrides: {
+            '5': HASH.aspectConsecration, // capacity 3
+            '6': HASH.aspectSol, //          capacity 3 — total 6
+            '7': HASH.fragTorches, //        cost 1
+            '8': HASH.fragWonder, //         cost 5
+            '9': HASH.fragSearing, //        cost 1 — total 7 > 6
+          },
+        },
+      }),
+      { content: 'over budget' },
+    ],
+    { manifest },
+  );
+
+  expect(result.status).toBe('answer');
+  const first = toolResults(result)[0];
+  expect(first.error).toBeTruthy();
+  expect(first.problems.join('\n')).toContain('capacity');
+  expect(first).not.toHaveProperty('url');
+});
+
+test('a fragment absent from the player plug sets is rejected when live plug data is missing', async () => {
+  // Fragment sockets draw unlocks from profilePlugSets (plugSources bit 4).
+  // With that row gone, the static plugSet definition must not stand in as
+  // "unlocked" options — it lists possible rolls, not owned fragments.
+  const snapshot = createFixtureSnapshot();
+  delete snapshot.profilePlugSets!.data.plugs[HASH.plugSetFragments];
+  const result = await run(
+    [
+      proposeCall('p1', {
+        ...VALID_ARGS,
+        subclass: { instanceId: 's1', socketOverrides: { '8': HASH.fragAshes } },
+      }),
+      { content: 'nope' },
+    ],
+    { snapshot },
+  );
+
+  expect(result.status).toBe('answer');
+  const first = toolResults(result)[0];
+  expect(first.error).toBeTruthy();
+  expect(first.problems.join('\n')).toContain('socket 8');
+  expect(first).not.toHaveProperty('url');
 });

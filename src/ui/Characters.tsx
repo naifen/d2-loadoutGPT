@@ -30,10 +30,12 @@ export function Characters() {
     setError(undefined);
     try {
       apply(await getSnapshot(true));
+      // Flag the session only on success — a failed fetch must not suppress
+      // the first-open auto-refresh for the rest of the session.
+      await browser.storage.session?.set({ [SESSION_KEY]: true }).catch(() => {});
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
-      await browser.storage.session?.set({ [SESSION_KEY]: true }).catch(() => {});
       setBusy(false);
     }
   }

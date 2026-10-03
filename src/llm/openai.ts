@@ -55,7 +55,7 @@ const errorMessage = (body: unknown): string | undefined => {
 
 const looksLikeToolsUnsupported = (message: string) => /tool|function call/i.test(message);
 
-function classify(status: number, headers: Headers, bodyText: string): LlmError {
+export function classify(status: number, headers: Headers, bodyText: string): LlmError {
   const message = errorMessage(tryParse(bodyText)) ?? bodyText.slice(0, BODY_EXCERPT) ?? '';
   const detail = message || `HTTP ${status}`;
   if (status === 401 || status === 403) {
@@ -105,18 +105,23 @@ const tryParse = (text: string): unknown => {
 // Minimal SSE reader: `data: <json>\n\n` events, `:`-prefixed keepalives,
 // `data: [DONE]` terminator.
 
-async function* sseEvents(res: Response): AsyncGenerator<Record<string, unknown>> {
-  const reader = res.body!.getReader();
+export async function* sseEvents(
+  stream: ReadableStream<Uint8Array>,
+): AsyncGenerator<Record<string, unknown>> {
+  const reader = stream.getReader();
   const dec = new TextDecoder();
   let buf = '';
   for (;;) {
     const { done, value } = await reader.read();
     if (done) break;
     buf += dec.decode(value, { stream: true });
-    let idx;
-    while ((idx = buf.search(/\r?\n\r?\n/)) >= 0) {
-      const raw = buf.slice(0, idx);
-      buf = buf.slice(idx + (buf[idx] === '\r' ? 4 : 2));
+    let match;
+    // Separators are 2–4 bytes (\n\n, \r\n\n, \n\r\n, \r\n\r\n) — slice on the
+    // match length, not on a guessed width, or a \r\n\n eats a byte of the
+    // next event and drops its `data:` line.
+    while ((match = /\r?\n\r?\n/.exec(buf))) {
+      const raw = buf.slice(0, match.index);
+      buf = buf.slice(match.index + match[0].length);
       const dataLines = raw
         .split('\n')
         .filter((l) => l.startsWith('data:'))
@@ -193,7 +198,7 @@ export function createOpenAITransport(settings: LlmEndpointSettings): LLMTranspo
       let content = '';
       const slots = new Map<number, { id: string; name: string; args: string }>();
       try {
-        for await (const raw of sseEvents(res)) {
+        for await (const raw of sseEvents(res.body!)) {
           poke();
           const chunk = raw as StreamChunk;
           if (chunk.error) throw classifyStreamError(chunk.error);

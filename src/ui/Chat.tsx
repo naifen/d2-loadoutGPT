@@ -9,6 +9,7 @@
 
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { runAgentTurn, type TurnResult } from '../agent/runner';
+import { PROPOSE_LOADOUT_TOOL_NAME } from '../agent/system-prompt';
 import type { LoadoutProposal } from '../agent/tools';
 import type { ChatMessage } from '../agent/transport';
 import { getTokens } from '../bungie/auth';
@@ -41,19 +42,35 @@ const toolLabel = (name: string) => TOOL_LABELS[name] ?? `Running ${name}…`;
 /** Rebuild display rows from a persisted wire history (panel reopened). */
 function rowsFromHistory(messages: ChatMessage[]): Row[] {
   const rows: Row[] = [];
+  const callNames = new Map<string, string>();
   for (const m of messages) {
     if (m.role === 'user') {
       rows.push({ kind: 'user', text: m.content ?? '' });
     } else if (m.role === 'assistant') {
       if (m.content) rows.push({ kind: 'assistant', text: m.content });
       for (const tc of m.tool_calls ?? []) {
+        callNames.set(tc.id, tc.function.name);
         rows.push({ kind: 'activity', id: tc.id, label: toolLabel(tc.function.name), done: true });
       }
+    } else if (m.role === 'tool' && callNames.get(m.tool_call_id ?? '') === PROPOSE_LOADOUT_TOOL_NAME) {
+      // The terminal tool result persists the LoadoutProposal — restore the card.
+      const p = m.content ? tryParse(m.content) : undefined;
+      if (p && ['name', 'url', 'query', 'card'].every((k) => typeof p[k] === 'string')) {
+        rows.push({ kind: 'proposal', output: p as LoadoutProposal });
+      }
     }
-    // tool messages need no row — the activity row already stands for them
+    // other tool messages need no row — the activity row already stands for them
   }
   return rows;
 }
+
+const tryParse = (text: string): any => {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+};
 
 function errorText(e: unknown): string {
   if (e instanceof LlmError) {

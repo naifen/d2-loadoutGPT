@@ -166,6 +166,8 @@ async function plugSummary(ctx: AgentToolContext, hash: number) {
  * socketEntry.plugSources says so. `includeStatic` additionally falls back to
  * the definition's reusablePlugItems/plugSet/singleInitialItemHash (possible
  * rolls, not proven-unlocked) — used by get_item, not list_subclass_options.
+ * Exception: when plugSources delegates to the live plugSet components, the
+ * static plugSet is never a fallback — rolls are not unlocks.
  */
 async function socketOptions(
   ctx: AgentToolContext,
@@ -204,7 +206,10 @@ async function socketOptions(
     for (const p of entry?.reusablePlugItems ?? []) {
       candidates.set(p.plugItemHash, asPlug(p.plugItemHash));
     }
-    if (plugSetHash) {
+    if (
+      plugSetHash &&
+      !(sources & (SOCKET_PLUG_SOURCES.profilePlugSet | SOCKET_PLUG_SOURCES.characterPlugSet))
+    ) {
       const plugSet = await ctx.manifest.getPlugSet(plugSetHash);
       for (const p of plugSet?.reusablePlugItems ?? []) {
         if (p.currentlyCanRoll !== false) candidates.set(p.plugItemHash, asPlug(p.plugItemHash));
@@ -543,6 +548,28 @@ async function abilityGroup(
   return undefined;
 }
 
+/** Σ of an energy value over plug item hashes — missing/null plugs count 0. */
+async function plugEnergySum(
+  ctx: AgentToolContext,
+  plugHashes: (number | undefined)[],
+  energyOf: (plug: NonNullable<DestinyInventoryItemDefinition['plug']>) => number | undefined,
+): Promise<number> {
+  let total = 0;
+  for (const hash of plugHashes) {
+    const def = hash == null ? undefined : await ctx.manifest.getItem(hash);
+    total += (def?.plug && energyOf(def.plug)) || 0;
+  }
+  return total;
+}
+
+/** Fragment slots granted by aspect plugs (Σ plug.energyCapacity.capacityValue). */
+const aspectCapacity = (ctx: AgentToolContext, plugHashes: (number | undefined)[]) =>
+  plugEnergySum(ctx, plugHashes, (p) => p.energyCapacity?.capacityValue);
+
+/** Fragment slots spent by fragment plugs (Σ plug.energyCost.energyCost). */
+const fragmentCost = (ctx: AgentToolContext, plugHashes: (number | undefined)[]) =>
+  plugEnergySum(ctx, plugHashes, (p) => p.energyCost?.energyCost);
+
 const listSubclassOptions: AgentTool = {
   schema: {
     type: 'function',
@@ -637,13 +664,10 @@ const listSubclassOptions: AgentTool = {
     }
 
     // Fragment capacity = sum of the *equipped* aspects' energyCapacity.
-    let fragmentCapacity = 0;
-    for (const i of aspectIndexes) {
-      const aspectHash = socketStates[i]?.plugHash;
-      if (aspectHash == null) continue;
-      const aspectDef = await ctx.manifest.getItem(aspectHash);
-      fragmentCapacity += aspectDef?.plug?.energyCapacity?.capacityValue ?? 0;
-    }
+    const fragmentCapacity = await aspectCapacity(
+      ctx,
+      aspectIndexes.map((i) => socketStates[i]?.plugHash),
+    );
 
     return {
       result: {
@@ -982,6 +1006,26 @@ const proposeLoadout: AgentTool = {
               } else {
                 plugOnSocket.set(plugHash, idx);
               }
+            }
+            // Fragment capacity: the effective aspects' energyCapacity must
+            // cover the effective fragments' energyCost — the same math
+            // list_subclass_options displays (overrides win, else the plug
+            // currently in the socket).
+            const aspectSockets: number[] = [];
+            const fragmentSockets: number[] = [];
+            for (const c of subDef.sockets?.socketCategories ?? []) {
+              if (ASPECT_CATS.has(c.socketCategoryHash)) aspectSockets.push(...c.socketIndexes);
+              else if (FRAGMENT_CATS.has(c.socketCategoryHash)) fragmentSockets.push(...c.socketIndexes);
+            }
+            const effectivePlug = (i: number) => chosen.get(i) ?? socketStates[i]?.plugHash;
+            const [capacity, cost] = await Promise.all([
+              aspectCapacity(ctx, aspectSockets.map(effectivePlug)),
+              fragmentCost(ctx, fragmentSockets.map(effectivePlug)),
+            ]);
+            if (cost > capacity) {
+              problems.push(
+                `subclass.socketOverrides: the chosen Fragments cost ${cost} but the chosen Aspects only grant ${capacity} of fragment capacity — drop Fragments or pick Aspects that grant more.`,
+              );
             }
             subclassEntry = { hash: subOwned.item.itemHash };
             if (chosen.size) {
