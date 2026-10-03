@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'preact/hooks';
 import { getTokens, login, logout, type BungieTokens } from '../bungie/auth';
 import { bungieFetch } from '../bungie/http';
+import type { LlmEndpointSettings } from '../llm/openai';
+import { DEFAULT_LLM_SETTINGS, getLlmSettings, saveLlmSettings } from '../storage/llmSettings';
 
 interface Memberships {
   bungieNetUser: { uniqueName: string };
@@ -11,6 +13,8 @@ export function Settings() {
   const [name, setName] = useState<string>();
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
+  const [llm, setLlm] = useState<LlmEndpointSettings>(DEFAULT_LLM_SETTINGS);
+  const [llmSaved, setLlmSaved] = useState(false);
 
   // Also exercises bungieFetch (API key, Origin, silent refresh) on every panel open.
   async function sync() {
@@ -39,7 +43,17 @@ export function Settings() {
 
   useEffect(() => {
     sync();
+    getLlmSettings().then(setLlm);
   }, []);
+
+  async function saveLlm() {
+    await saveLlmSettings(llm);
+    setLlmSaved(true);
+    setTimeout(() => setLlmSaved(false), 1500);
+  }
+
+  const setLlmField = (field: keyof LlmEndpointSettings) => (e: Event) =>
+    setLlm({ ...llm, [field]: (e.currentTarget as HTMLInputElement).value });
 
   return (
     <section>
@@ -57,6 +71,50 @@ export function Settings() {
         </button>
       )}
       {error && <p role="alert">{error}</p>}
+
+      <h2>LLM endpoint</h2>
+      <p>
+        Any OpenAI-compatible chat endpoint with tool calling. The key is stored in this
+        browser and sent only to the base URL below.
+      </p>
+      <p>
+        <label>
+          Base URL{' '}
+          <input
+            value={llm.baseUrl}
+            onInput={setLlmField('baseUrl')}
+            placeholder="https://api.openai.com/v1"
+            size={32}
+          />
+        </label>
+      </p>
+      <p>
+        <label>
+          API key{' '}
+          <input
+            type="password"
+            value={llm.apiKey}
+            onInput={setLlmField('apiKey')}
+            placeholder="empty for local servers"
+            size={32}
+          />
+        </label>
+      </p>
+      <p>
+        <label>
+          Model{' '}
+          <input
+            value={llm.model}
+            onInput={setLlmField('model')}
+            placeholder="e.g. gpt-4o-mini, qwen3:8b"
+            size={32}
+          />
+        </label>
+      </p>
+      <p>
+        <button onClick={saveLlm}>Save LLM settings</button>
+        {llmSaved && ' Saved.'}
+      </p>
     </section>
   );
 }

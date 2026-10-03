@@ -95,6 +95,32 @@ test('onEvent emits tool-call, tool-result and text events', async () => {
   expect(events.map((e) => e.type)).toEqual(['tool-call', 'tool-result', 'text']);
 });
 
+test('streamed text deltas from a transport onText are forwarded as text-delta events', async () => {
+  // A streaming transport (src/llm) calls this.onText per SSE delta; the
+  // runner forwards those to the observer so the panel renders text live.
+  const streaming: LLMTransport = {
+    async complete() {
+      this.onText?.('he');
+      this.onText?.('llo');
+      return { content: 'hello' };
+    },
+  };
+  const events: AgentEvent[] = [];
+  const result = await runAgentTurn({
+    transport: streaming,
+    snapshot: createFixtureSnapshot(),
+    manifest: createFixtureManifest(),
+    messages: [{ role: 'user', content: 'hi' }],
+    onEvent: (e) => events.push(e),
+  });
+  expect(events).toEqual([
+    { type: 'text-delta', delta: 'he' },
+    { type: 'text-delta', delta: 'llo' },
+    { type: 'text', content: 'hello' },
+  ]);
+  expect(result.content).toBe('hello');
+});
+
 test('unknown tool names return a correctable error result, not a crash', async () => {
   const { result } = await run([
     { toolCalls: [{ id: 'c1', name: 'delete_vault', arguments: '{}' }] },

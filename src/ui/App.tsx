@@ -1,6 +1,7 @@
 import { Settings } from './Settings';
 import { ManifestStatus } from './ManifestStatus';
 import { Characters } from './Characters';
+import { Chat } from './Chat';
 
 export function App() {
   return (
@@ -10,6 +11,7 @@ export function App() {
       <Settings />
       <Characters />
       <ManifestStatus />
+      <Chat />
     </main>
   );
 }

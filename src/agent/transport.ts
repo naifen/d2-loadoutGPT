@@ -49,4 +49,11 @@ export interface ToolSchema {
 
 export interface LLMTransport {
   complete(messages: ChatMessage[], tools: ToolSchema[]): Promise<AssistantTurn>;
+  /**
+   * Optional streaming hook: the runner assigns it around each complete()
+   * call when an observer is attached, and a streaming transport invokes it
+   * with each assistant text delta as it arrives. The deltas concatenate to
+   * AssistantTurn.content; callers that only want final text can ignore it.
+   */
+  onText?: (delta: string) => void;
 }
