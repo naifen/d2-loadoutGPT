@@ -5,6 +5,7 @@ import { getTokens } from '../bungie/auth';
 import { charactersFromSnapshot, getSnapshot } from '../bungie/profile';
 import type { CharacterRow } from '../bungie/profile';
 import { isRecord } from '../type-guards';
+import { ClassIcon, PowerIcon } from './icons';
 
 export function Characters() {
   const [signedIn, setSignedIn] = useState(false);
@@ -64,11 +65,10 @@ export function Characters() {
         <ul class="char-list">
           {characters.map((c) => (
             <li key={c.id}>
+              <ClassIcon classType={c.classType} class="icon-class" />
               <span class="char-name">{c.className}</span>
               <span class="char-power">
-                <svg viewBox="0 0 10 10" aria-hidden="true">
-                  <path d="M5 0.8L9.2 5L5 9.2L0.8 5Z" fill="none" stroke="currentColor" stroke-width="1.5" />
-                </svg>
+                <PowerIcon />
                 {c.light}
               </span>
               <span class="char-id">{c.id}</span>

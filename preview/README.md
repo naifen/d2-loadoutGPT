@@ -14,5 +14,9 @@ pnpm exec vite build --config preview/vite.config.ts          # static build to 
 pnpm exec vite preview --config preview/vite.config.ts --port 4319
 ```
 
+`?variant=<name>` layers a candidate stylesheet from `preview/variants/`
+over the shipped design (`nightops`, `menuplus`) so losing candidates stay
+comparable — see DESIGN.md → "Design candidates explored".
+
 Nothing under `preview/` is referenced by `wxt.config.ts` or `entrypoints/` —
 it is never shipped in the extension bundle.

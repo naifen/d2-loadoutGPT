@@ -1,0 +1,12 @@
+/*
+ * Candidate: "Night Ops" — runner-up. Same ornaments as the shipped design
+ * but replaces the star-map backdrop with a plain deep-navy vignette, for
+ * judging how much the stars contribute. Subtracts: star tile only.
+ */
+
+.app {
+  background:
+    radial-gradient(160% 110% at 50% -35%, rgba(74, 98, 138, 0.22), rgba(0, 0, 0, 0) 58%),
+    radial-gradient(100% 65% at 85% 115%, rgba(40, 56, 80, 0.28), rgba(0, 0, 0, 0) 65%),
+    var(--d2-ground);
+}

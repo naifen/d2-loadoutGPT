@@ -1,0 +1,37 @@
+/*
+ * Candidate: "Menu+" — the discipline option, kept as a control. Subtracts
+ * every atmosphere layer the shipped design added: flat ground, no sheen,
+ * no edge fades, no nav-tab ticks, plain disc bullets. Icons and the
+ * sigil markup stay (they live in the components).
+ */
+
+.app {
+  background: var(--d2-ground);
+}
+
+.app > section > h2 {
+  display: block;
+}
+.app > section > h2::before {
+  display: none;
+}
+
+.chat-log {
+  -webkit-mask-image: none;
+  mask-image: none;
+}
+
+.build-card-head::after {
+  display: none;
+}
+
+.build-card-body ul {
+  list-style: disc;
+  padding-left: 1.3em;
+}
+.build-card-body ul > li {
+  padding-left: 0;
+}
+.build-card-body ul > li::before {
+  display: none;
+}

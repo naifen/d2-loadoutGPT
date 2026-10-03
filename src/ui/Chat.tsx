@@ -23,6 +23,7 @@ import { createOpenAITransport, LlmError } from '../llm/openai';
 import { clearChatHistory, loadChatHistory, saveChatHistory } from '../storage/chatHistory';
 import { getLlmSettings, isLlmConfigured } from '../storage/llmSettings';
 import { BuildCard } from './BuildCard';
+import { CheckIcon, GhostMark, ObjectiveIcon, SigilMark } from './icons';
 import { isRecord } from '../type-guards';
 
 type Row =
@@ -276,6 +277,7 @@ export function Chat() {
       <ul ref={listRef} class="chat-log">
         {rows.length === 0 && !live && !running && (
           <li class="chat-empty">
+            <SigilMark class="chat-sigil" />
             <p>
               <em>Ask for a loadout — the assistant works from your inventory.</em>
             </p>
@@ -293,7 +295,10 @@ export function Chat() {
         )}
         {running && !live && (
           <li class="row row-thinking">
-            <em>Thinking…</em>
+            <p>
+              <GhostMark class="icon-ghost" />
+              <em>Thinking…</em>
+            </p>
           </li>
         )}
       </ul>
@@ -339,11 +344,7 @@ function renderRow(row: Row) {
     case 'activity':
       return (
         <p>
-          {row.done && (
-            <svg class="icon-check" viewBox="0 0 12 12" aria-hidden="true">
-              <path d="M2 6.5l2.5 2.5L10 3.5" fill="none" stroke="currentColor" stroke-width="1.5" />
-            </svg>
-          )}
+          {row.done ? <CheckIcon class="icon-check" /> : <ObjectiveIcon class="icon-pend" />}
           <em>{row.done ? row.label.replace(/…$/, '') : row.label}</em>
         </p>
       );

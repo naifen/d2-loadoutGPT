@@ -11,6 +11,7 @@
   --d2-surface: rgba(255, 255, 255, 0.05);
   --d2-tooltip: rgba(15, 18, 23, 0.92);
   --d2-border: rgba(255, 255, 255, 0.25);
+  --d2-border-card: rgba(255, 255, 255, 0.15);
   --d2-border-faint: rgba(255, 255, 255, 0.12);
   --d2-separator: rgba(255, 255, 255, 0.07);
   --d2-fill: #ffffff;
@@ -133,6 +134,13 @@ a:focus-visible {
   height: 100dvh;
   overflow-x: hidden;
   overflow-y: auto;
+  /* the Director's star map: a sparse static star tile, two soft nebula
+     glows, over the ground — painted once, never animated */
+  background:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='320' height='320'%3E%3Cg fill='%23fff'%3E%3Ccircle cx='28' cy='42' r='.7' opacity='.5'/%3E%3Ccircle cx='86' cy='18' r='.6' opacity='.3'/%3E%3Ccircle cx='150' cy='60' r='.9' opacity='.45'/%3E%3Ccircle cx='205' cy='30' r='.6' opacity='.25'/%3E%3Ccircle cx='268' cy='82' r='1' opacity='.5'/%3E%3Ccircle cx='308' cy='150' r='.6' opacity='.3'/%3E%3Ccircle cx='60' cy='122' r='.8' opacity='.35'/%3E%3Ccircle cx='120' cy='170' r='.6' opacity='.2'/%3E%3Ccircle cx='190' cy='140' r='.7' opacity='.4'/%3E%3Ccircle cx='250' cy='200' r='.6' opacity='.25'/%3E%3Ccircle cx='40' cy='230' r='1' opacity='.45'/%3E%3Ccircle cx='140' cy='272' r='.7' opacity='.3'/%3E%3Ccircle cx='230' cy='290' r='.6' opacity='.2'/%3E%3Ccircle cx='300' cy='250' r='.8' opacity='.35'/%3E%3C/g%3E%3Cg stroke='%23fff' opacity='.05'%3E%3Cpath d='M150 60 268 82'/%3E%3Cpath d='M60 122 150 60'/%3E%3C/g%3E%3C/svg%3E") 0 0 / 320px 320px,
+    radial-gradient(150% 95% at 50% -30%, rgba(126, 152, 196, 0.13), rgba(0, 0, 0, 0) 55%),
+    radial-gradient(110% 70% at 85% 115%, rgba(96, 120, 160, 0.07), rgba(0, 0, 0, 0) 60%),
+    var(--d2-ground);
 }
 
 .app-header {
@@ -160,8 +168,13 @@ a:focus-visible {
   flex: none;
 }
 
-/* section headers — the D2 nav-tab treatment */
-.app h2 {
+/* section headers — the D2 nav-tab treatment, led by a drawn diamond tick.
+   Scoped to direct section children: markdown h2s inside .build-card-body
+   keep the tooltip heading style, never this chrome. */
+.app > section > h2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   font-size: 11.5px;
   font-weight: 600;
   letter-spacing: 0.18em;
@@ -172,8 +185,16 @@ a:focus-visible {
   border-bottom: 1px solid var(--d2-border-faint);
   position: relative;
 }
+.app > section > h2::before {
+  content: '';
+  width: 4px;
+  height: 4px;
+  flex: none;
+  border: 1.5px solid var(--d2-heading);
+  transform: rotate(45deg);
+}
 /* the small marker bar under the active header */
-.app h2::after {
+.app > section > h2::after {
   content: '';
   position: absolute;
   left: 0;
@@ -406,6 +427,12 @@ a:focus-visible {
 .char-list li:last-child {
   border-bottom: 0;
 }
+.icon-class {
+  width: 13px;
+  height: 13px;
+  align-self: center;
+  color: var(--d2-dim);
+}
 .char-name {
   color: var(--d2-heading);
   font-weight: 600;
@@ -462,7 +489,7 @@ a:focus-visible {
   padding: 12px 0 0;
   border-top: 1px solid var(--d2-border-faint);
 }
-.chat h2 {
+.chat > h2 {
   flex: none;
   margin: 0 20px 10px;
 }
@@ -473,6 +500,9 @@ a:focus-visible {
   overflow-y: auto;
   list-style: none;
   padding: 0 20px;
+  /* rows fade under the log's edges — the D2 menu-scroll cue */
+  -webkit-mask-image: linear-gradient(to bottom, transparent, #000 12px, #000 calc(100% - 12px), transparent);
+  mask-image: linear-gradient(to bottom, transparent, #000 12px, #000 calc(100% - 12px), transparent);
 }
 .chat-log > li {
   padding: 7px 0;
@@ -482,6 +512,17 @@ a:focus-visible {
   border-bottom: 0;
 }
 /* empty conversation — a quiet line that teaches the surface */
+.chat-log > li.chat-empty {
+  padding: 18px 0 14px;
+  text-align: center;
+}
+.chat-sigil {
+  display: block;
+  width: 56px;
+  height: 56px;
+  margin: 0 auto 8px;
+  color: rgba(255, 255, 255, 0.1);
+}
 .chat-log > li.chat-empty > p {
   font-size: 12px;
   color: var(--d2-dim);
@@ -505,6 +546,17 @@ a:focus-visible {
 }
 .row-live em {
   white-space: pre-wrap;
+}
+.row-thinking p {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.icon-ghost {
+  width: 11px;
+  height: 11px;
+  flex: none;
+  color: var(--d2-dim);
 }
 .row-thinking em {
   animation: d2-pulse 1.4s ease-in-out infinite;
@@ -534,6 +586,14 @@ a:focus-visible {
   height: 11px;
   flex: none;
   color: var(--d2-xp);
+}
+/* pending objective — hollow diamond in the same slot, so no row shifts */
+.row-activity .icon-pend {
+  width: 11px;
+  height: 11px;
+  flex: none;
+  color: var(--d2-dim);
+  animation: d2-pulse 1.4s ease-in-out infinite;
 }
 .row-notice em {
   color: var(--d2-dim);
@@ -583,14 +643,52 @@ a:focus-visible {
 .build-card {
   margin: 8px 0 4px;
   background: var(--d2-tooltip);
-  border: 1px solid rgba(255, 255, 255, 0.15);
+  border: 1px solid var(--d2-border-card);
   box-shadow: 0 12px 30px rgba(0, 0, 0, 0.6);
 }
 .build-card-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
   padding: 10px 14px 9px;
   background: #7c681f; /* fallback for color-mix */
   background: var(--d2-gold-band);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.15);
+  border-bottom: 1px solid var(--d2-border-card);
+  position: relative;
+  overflow: hidden;
+}
+/* the exotic shimmer — a slow light sweep across the band, transform-only */
+.build-card-head::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 42%;
+  background: linear-gradient(100deg, transparent, rgba(255, 255, 255, 0.22), transparent);
+  transform: translateX(-160%) skewX(-12deg);
+  animation: d2-sheen 4.8s ease-in-out infinite;
+}
+@keyframes d2-sheen {
+  0% {
+    transform: translateX(-160%) skewX(-12deg);
+  }
+  18%,
+  100% {
+    transform: translateX(380%) skewX(-12deg);
+  }
+}
+/* the engram tile, framed like the item icon on a real tooltip */
+.build-card-icon {
+  width: 20px;
+  height: 20px;
+  flex: none;
+  padding: 2px;
+  color: #ffffff;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+}
+.build-card-titles {
+  min-width: 0;
 }
 .build-card-head h3 {
   font-size: 13px;
@@ -633,11 +731,32 @@ a:focus-visible {
 }
 .build-card-body ul,
 .build-card-body ol {
-  padding-left: 1.3em;
   margin: 6px 0;
+}
+.build-card-body ol {
+  padding-left: 1.3em;
+}
+/* tooltip bullets become small drawn diamonds — the perk-marker idiom */
+.build-card-body ul {
+  list-style: none;
+  padding-left: 0.4em;
 }
 .build-card-body li {
   margin: 3px 0;
+}
+.build-card-body ul > li {
+  position: relative;
+  padding-left: 1.1em;
+}
+.build-card-body ul > li::before {
+  content: '';
+  position: absolute;
+  left: 0.15em;
+  top: 0.5em;
+  width: 4px;
+  height: 4px;
+  border: 1px solid var(--d2-border);
+  transform: rotate(45deg);
 }
 .build-card-body hr {
   border: 0;
@@ -724,7 +843,7 @@ a:focus-visible {
 .manifest-bar > span {
   display: block;
   height: 100%;
-  background: #fcfcfc;
+  background: var(--d2-fill);
 }
 
 /* ---------- reduced motion ---------- */

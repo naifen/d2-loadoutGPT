@@ -3,6 +3,7 @@ import { browser } from 'wxt/browser';
 import DOMPurify from 'dompurify';
 import { marked } from 'marked';
 import type { LoadoutProposal } from '../agent/proposal';
+import { EngramIcon } from './icons';
 
 export function BuildCard({ proposal }: { proposal: LoadoutProposal }) {
   const [copied, setCopied] = useState<'link' | 'query'>();
@@ -62,8 +63,11 @@ export function BuildCard({ proposal }: { proposal: LoadoutProposal }) {
   return (
     <div class="build-card">
       <header class="build-card-head">
-        <h3>{proposal.name}</h3>
-        <p class="build-card-sub">Loadout proposal</p>
+        <EngramIcon class="build-card-icon" />
+        <div class="build-card-titles">
+          <h3>{proposal.name}</h3>
+          <p class="build-card-sub">Loadout proposal</p>
+        </div>
       </header>
       <div class="build-card-body" dangerouslySetInnerHTML={{ __html: html }} />
       <p class="build-card-actions">

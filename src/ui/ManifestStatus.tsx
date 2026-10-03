@@ -26,7 +26,14 @@ export function ManifestStatus() {
     return (
       <p class="manifest-status">
         Downloading definitions: {state.table} ({state.done}/{state.total})…
-        <span class="manifest-bar" aria-hidden="true">
+        <span
+          class="manifest-bar"
+          role="progressbar"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={pct}
+          aria-label="Manifest download progress"
+        >
           <span style={{ width: `${pct}%` }} />
         </span>
       </p>
