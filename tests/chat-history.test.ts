@@ -24,12 +24,12 @@ test('private history requires an owned login and cannot be restored by a late w
   expect(await loadChatHistory()).toEqual([]);
 
   const tokens = {
-    accessToken: 'fixture', refreshToken: 'fixture', membershipId: 'fixture-account',
-    accessExpiresAt: Date.now() + 3_600_000, refreshExpiresAt: Date.now() + 36_000_000,
+    accessToken: 'fixture', membershipId: 'fixture-account',
+    accessExpiresAt: Date.now() + 3_600_000,
   };
-  storage.local.bungieTokens = tokens; // Pre-review tokens have no ownership identity.
+  storage.session.bungieTokens = tokens; // Unowned tokens cannot restore private history.
   expect(await loadChatHistory()).toEqual([]);
-  storage.local.bungieTokens = { ...tokens, sessionId: 'owned-session' };
+  storage.session.bungieTokens = { ...tokens, sessionId: 'owned-session' };
   expect(await loadChatHistory()).toEqual(privateMessages);
 
   await logout();

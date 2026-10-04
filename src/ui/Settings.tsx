@@ -4,6 +4,7 @@ import { getTokens, login, logout } from '../bungie/auth';
 import type { BungieTokens } from '../bungie/auth';
 import { bungieFetch } from '../bungie/http';
 import type { LlmEndpointSettings } from '../llm/openai';
+import { completionUrl } from '../llm/openai';
 import { DEFAULT_LLM_SETTINGS, getLlmSettings, saveLlmSettings } from '../storage/llmSettings';
 import type { LlmSettings } from '../storage/llmSettings';
 
@@ -20,7 +21,7 @@ export function Settings() {
   const [llmSaved, setLlmSaved] = useState(false);
   const generation = useRef(0);
 
-  // Also exercises bungieFetch (API key, Origin, silent refresh) on every panel open.
+  // Also exercises bungieFetch (API key, Origin, token expiry) on every panel open.
   async function sync() {
     const current = ++generation.current;
     const t = await getTokens();
@@ -55,7 +56,7 @@ export function Settings() {
     void sync();
     getLlmSettings().then(setLlm).catch((e) => setError(e instanceof Error ? e.message : String(e)));
     const onChanged = (changes: Record<string, unknown>, area: string) => {
-      if (area === 'local' && 'bungieTokens' in changes) void sync();
+      if (area === 'session' && 'bungieTokens' in changes) void sync();
     };
     browser.storage.onChanged.addListener(onChanged);
     return () => {
@@ -68,6 +69,11 @@ export function Settings() {
     setLlmSaved(false);
     setError(undefined);
     try {
+      const endpoint = new URL(completionUrl(llm.baseUrl));
+      // Match patterns omit ports for Firefox compatibility; the transport
+      // still sends only to the exact configured URL and refuses redirects.
+      const granted = await browser.permissions.request({ origins: [`${endpoint.protocol}//${endpoint.hostname}/*`] });
+      if (!granted) throw new Error('Access to the LLM endpoint was denied. Your saved settings were not changed.');
       await saveLlmSettings(llm);
       setLlmSaved(true);
       setTimeout(() => setLlmSaved(false), 1500);
@@ -117,7 +123,9 @@ export function Settings() {
           <p class="hint">
             Any OpenAI-compatible chat endpoint with tool calling. By default, the key stays
             in memory until the browser restarts or the extension reloads, and is sent only to the
-            configured endpoint. Changing the endpoint origin clears the key.
+            configured endpoint. Saving asks for access to that host. Changing the endpoint origin clears the key.
+            Your messages and inventory details are sent to that provider; its retention policy
+            applies. Bungie access tokens are never sent to the model.
           </p>
           <label class="field">
             <span>Base URL</span>

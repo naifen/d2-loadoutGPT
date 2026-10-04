@@ -6,9 +6,7 @@ import type { BungieTokens } from '../../src/bungie/auth';
 const TOKENS: BungieTokens = {
   sessionId: 'preview-session',
   accessToken: 'preview-access',
-  refreshToken: 'preview-refresh',
   accessExpiresAt: Date.now() + 3_600_000,
-  refreshExpiresAt: Date.now() + 86_400_000,
   membershipId: '424242',
 };
 

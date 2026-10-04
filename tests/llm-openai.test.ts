@@ -93,3 +93,60 @@ test('error excerpts redact a key before truncating it', () => {
   expect(error.message).not.toContain('fixture');
   expect(error.message).toContain('[REDACTED]');
 });
+
+
+test.each([200, 401])('a stalled HTTP %s response body is aborted by the idle watchdog', async (status) => {
+  vi.useFakeTimers();
+  let requestSignal: AbortSignal | undefined;
+  vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
+    requestSignal = init!.signal as AbortSignal;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        requestSignal!.addEventListener('abort', () => controller.error(requestSignal!.reason), { once: true });
+      },
+    });
+    return new Response(body, { status, headers: { 'content-type': 'text/event-stream' } });
+  });
+  try {
+    const completion = createOpenAITransport({ baseUrl: 'http://localhost/v1', apiKey: '', model: 'fixture' })
+      .complete([], []);
+    const rejected = expect(completion).rejects.toThrow();
+    await vi.advanceTimersByTimeAsync(60_000);
+    await rejected;
+    expect(requestSignal!.aborted).toBe(true);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test('continuous keepalives cannot extend a provider request past the overall deadline', async () => {
+  vi.useFakeTimers();
+  let requestSignal: AbortSignal | undefined;
+  let stopKeepalive = () => {};
+  vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
+    requestSignal = init!.signal as AbortSignal;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        const keepalive = setInterval(() => controller.enqueue(new TextEncoder().encode(': keepalive\n\n')), 30_000);
+        stopKeepalive = () => clearInterval(keepalive);
+        requestSignal!.addEventListener('abort', () => {
+          stopKeepalive();
+          controller.error(requestSignal!.reason);
+        }, { once: true });
+      },
+      cancel() { stopKeepalive(); },
+    });
+    return new Response(body, { headers: { 'content-type': 'text/event-stream' } });
+  });
+  try {
+    const completion = createOpenAITransport({ baseUrl: 'http://localhost/v1', apiKey: '', model: 'fixture' })
+      .complete([], []);
+    const rejected = expect(completion).rejects.toThrow(/10 minute limit/);
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    await rejected;
+    expect(requestSignal!.aborted).toBe(true);
+  } finally {
+    stopKeepalive();
+    vi.useRealTimers();
+  }
+});

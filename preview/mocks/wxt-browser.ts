@@ -21,6 +21,9 @@ export const browser = {
       hasListener: () => false,
     },
   },
+  permissions: {
+    request: async (_permissions: { origins: string[] }) => true,
+  },
   tabs: {
     create: async (_props: { url?: string }) => ({ id: 1 }),
   },

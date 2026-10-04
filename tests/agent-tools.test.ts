@@ -48,6 +48,12 @@ const search = (args: Record<string, unknown>) =>
 const instanceIds = (res: { items: Record<string, unknown>[] }) => res.items.map((i) => i.instanceId);
 
 // ---------------------------------------------------------------------------
+test('oversized model arguments are rejected instead of executing the requested tool', async () => {
+  const result = await callTool('get_characters', { ignored: 'x'.repeat(65_536) });
+  expect(result).toMatchObject({ error: expect.stringContaining('65536-character limit') });
+  expect(result).not.toHaveProperty('characters');
+});
+
 
 test('search_items with no filters finds gear in the vault and on both characters', async () => {
   const res = await search({});

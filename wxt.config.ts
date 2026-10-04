@@ -14,15 +14,22 @@ export default defineConfig({
     description: 'Destiny 2 loadout assistant',
     action: { default_title: 'd2-loadoutGPT' },
     permissions: ['identity', 'storage'],
-    // <all_urls>: the LLM base URL is user-configured and arbitrary, including
-    // http://localhost:* (Ollama/LM Studio) — a fixed host list can't cover it.
-    // The extension still only ever fetches Bungie.net plus that one endpoint.
-    host_permissions: ['https://www.bungie.net/*', '<all_urls>'],
+    host_permissions: ['https://www.bungie.net/*'],
+    // Saving an endpoint requests only that host, not access to every website.
+    ...(browser === 'firefox'
+      ? { optional_permissions: ['<all_urls>'] }
+      : { optional_host_permissions: ['<all_urls>'] }),
     ...(browser === 'firefox'
       ? {
           browser_specific_settings: {
-            // 115+ for browser.storage.session (first-open-per-session flag).
-            gecko: { id: FIREFOX_ID, strict_min_version: '115.0' },
+            // Built-in consent for account identifiers, authentication, and chats.
+            gecko: {
+              id: FIREFOX_ID,
+              strict_min_version: '140.0',
+              data_collection_permissions: {
+                required: ['authenticationInfo', 'personalCommunications', 'personallyIdentifyingInfo'],
+              },
+            },
           },
         }
       : { key: CHROME_KEY }),
