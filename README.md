@@ -10,7 +10,7 @@ Built with [WXT](https://wxt.dev), Preact, and TypeScript. MIT licensed. Sideloa
 
 ## Development
 
-Requires Node 22+ and pnpm.
+Requires Node 22+, pnpm, and a current Chrome or Firefox 140+.
 
 ```sh
 pnpm install
@@ -35,10 +35,13 @@ Bungie app. `.env.*` files are gitignored; only `.env.example` is committed. Var
 | Variable                   | Purpose                           |
 | -------------------------- | --------------------------------- |
 | `WXT_BUNGIE_API_KEY`       | Bungie API key                    |
-| `WXT_BUNGIE_CLIENT_ID`     | OAuth client id (Confidential)    |
-| `WXT_BUNGIE_CLIENT_SECRET` | OAuth client secret               |
+| `WXT_BUNGIE_CLIENT_ID`     | OAuth client id (Public)          |
 
 Access them in code via `import.meta.env.WXT_BUNGIE_API_KEY` etc.
+
+These app identifiers are included in the built extension. **Never configure a
+confidential OAuth client secret in a browser extension**: installed bundles are
+readable by their users.
 
 ## Register your Bungie app
 
@@ -49,7 +52,7 @@ single redirect URL per app and Chrome/Firefox use different redirect hosts (see
 
 For each app (Chrome and Firefox):
 
-- **OAuth Client Type**: `Confidential` — required for refresh tokens (Public clients get none).
+- **OAuth Client Type**: `Public` — an extension cannot keep a client secret.
 - **Redirect URL**: exactly that browser's redirect URL from the table below — the string
   `browser.identity.getRedirectURL()` returns, trailing `/` included. It must be `https`.
 - **Scope**: tick `ReadBasicUserProfile` (account/membership lookup) and
@@ -59,22 +62,33 @@ For each app (Chrome and Firefox):
   `moz-extension://…`, and anything narrower fails Bungie's Origin check
   (`OriginHeaderDoesNotMatchKey`).
 
-After saving, copy **API Key**, **OAuth client_id**, and **OAuth client_secret** into the
-matching `.env.chrome` / `.env.firefox`. Keys can be regenerated on the same page if leaked.
-There is no server-side revoke; users manage authorized apps at
+After saving, copy **API Key** and **OAuth client_id** into the matching
+`.env.chrome` / `.env.firefox`. Do not create or include a client secret.
+[Bungie's public-client flow](https://github.com/Bungie-net/api/wiki/OAuth-Documentation)
+does not issue refresh tokens; sign in again when the access token expires.
+Tokens live only in browser session storage and clear on browser restart or extension reload.
+
+Before releasing an update from the earlier confidential-client build, register public
+apps and disable the old confidential credentials in the Bungie application portal.
+Treat any secret included in a distributed bundle as exposed; deleting it from source
+does not revoke it. Users can remove the old app authorization at
 <https://www.bungie.net/en/Profile/Settings> → "Authorized Applications".
 
 Logout clears the mounted chat, profile cache, tokens, and session refresh flag.
-Account-owned writes are serialized with logout across panels; late OAuth, refresh,
+Account-owned writes are serialized with logout across panels; late OAuth,
 profile, and chat completions cannot restore a logged-out session.
 Updating from the earlier development build requires one fresh Bungie login;
-history from an unowned or signed-out session is not restored.
+history from an unowned or signed-out session is not restored. Startup removes
+credentials left in local storage by the old build.
 
 ## LLM settings
 
 The assistant talks to any **OpenAI-compatible chat-completions endpoint** that supports
 tool calling and SSE streaming. Configure it in the Settings panel. The base URL and model
 persist in extension local storage; the API key is sent only to the configured endpoint.
+Your messages and inventory details are transmitted to that provider. Its retention
+policy applies; choose a provider and API key you trust. Bungie access tokens are
+not included in model requests.
 
 | Provider   | Base URL                          | Notes                                          |
 | ---------- | --------------------------------- | ---------------------------------------------- |
@@ -109,11 +123,20 @@ an endpoint to an unconfigured URL. Enter the final API base URL directly.
 Each completion has a 60-second idle timeout, a 10-minute overall deadline, and an
 8 MiB response limit. Interrupted, malformed, or incomplete streams fail visibly
 rather than becoming partial tool calls. Agent turns stop after 12 tool rounds or
-64 total tool calls. **New conversation** cancels an active turn and clears its context.
+64 total tool calls. Tool argument JSON is limited to 65,536 UTF-16 characters, and
+armor-mod assignment stops after 10,000 search steps instead of freezing the panel.
+**New conversation** cancels an active turn and clears its context.
 
-Because the base URL is user-configured (including `http://localhost:*`), the manifest
-requests `<all_urls>` host permission — a fixed list can't cover arbitrary endpoints.
-The extension still only ever contacts Bungie.net plus the endpoint you configure.
+Only Bungie.net access is granted at installation. Saving an LLM endpoint requests
+optional access to that endpoint's scheme and hostname; denying access leaves saved
+settings unchanged. Browser host permissions cover all ports on that host, while
+the transport targets the exact configured URL. Existing host grants can be revoked
+in the browser's extension settings. After upgrading, save the endpoint again to
+grant its optional permission.
+
+Firefox 140+ presents required data consent for authentication information, account
+identifiers, and personal communications. There is no telemetry or browsing-history
+collection.
 
 ## Usage
 
@@ -166,6 +189,18 @@ Run this in **both** browsers: `pnpm build` → `.output/chrome-mv3`,
 - [ ] Explicitly remembering the key preserves it across browser restarts; unchecking and saving removes it from local storage, and the next restart clears it.
 - [ ] Changing the endpoint origin clears the API-key field; invalid endpoint edits cannot overwrite saved settings.
 - [ ] A fixture endpoint that echoes a dummy key in an HTTP/SSE error shows `[REDACTED]`, not the key.
+
+### Production release gate
+
+Fixture builds are not release artifacts. Before distribution:
+
+- Register both public OAuth apps with the documented read-only scopes and exact redirect URLs;
+  disable any previously distributed confidential-client credentials.
+- Build with the real app identifiers; run `pnpm test`, `pnpm typecheck`, and `pnpm audit`.
+- Complete the checklist in both browsers with a live Bungie account, a trusted model
+  provider, and DIM. Fixture OAuth checks do not validate the Bungie app registration.
+- Verify that installation grants only Bungie.net host access, denied endpoint permission
+  leaves settings unchanged, and Firefox presents the declared data consent.
 
 ## Extension IDs and OAuth redirect URLs
 

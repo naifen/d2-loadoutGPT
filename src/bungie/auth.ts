@@ -10,33 +10,28 @@ const REVISION_KEY = 'bungieAuthRevision';
 const EXPIRY_MARGIN_MS = 60_000;
 
 export interface BungieTokens {
-  /** One interactive login; token refresh preserves it. */
+  /** One interactive public-client login. */
   sessionId: string;
   accessToken: string;
-  refreshToken: string;
   /** ms since epoch */
   accessExpiresAt: number;
-  /** ms since epoch */
-  refreshExpiresAt: number;
   /** Bungie.net membership id (not a Destiny membership id). */
   membershipId: string;
 }
 
 export async function getTokens(): Promise<BungieTokens | undefined> {
-  const { [STORAGE_KEY]: tokens } = await browser.storage.local.get(STORAGE_KEY);
+  const { [STORAGE_KEY]: tokens } = await browser.storage.session.get(STORAGE_KEY);
   if (!isRecord(tokens)) return undefined;
   const value = tokens;
   if (
     typeof value.sessionId !== 'string' ||
     typeof value.accessToken !== 'string' ||
-    typeof value.refreshToken !== 'string' ||
     typeof value.membershipId !== 'string' ||
-    typeof value.accessExpiresAt !== 'number' || !Number.isFinite(value.accessExpiresAt) ||
-    typeof value.refreshExpiresAt !== 'number' || !Number.isFinite(value.refreshExpiresAt)
+    typeof value.accessExpiresAt !== 'number' || !Number.isFinite(value.accessExpiresAt)
   ) return undefined;
   return {
-    sessionId: value.sessionId, accessToken: value.accessToken, refreshToken: value.refreshToken,
-    membershipId: value.membershipId, accessExpiresAt: value.accessExpiresAt, refreshExpiresAt: value.refreshExpiresAt,
+    sessionId: value.sessionId, accessToken: value.accessToken,
+    membershipId: value.membershipId, accessExpiresAt: value.accessExpiresAt,
   };
 }
 
@@ -55,26 +50,36 @@ export async function login(): Promise<BungieTokens> {
   checkCredentials();
   const state = crypto.randomUUID();
   await navigator.locks.request('bungie-session', () => browser.storage.session.set({ [REVISION_KEY]: state }));
+  const redirectUrl = browser.identity.getRedirectURL();
   const params = new URLSearchParams({
     client_id: import.meta.env.WXT_BUNGIE_CLIENT_ID,
     response_type: 'code',
     state,
     // Must equal the Redirect URL registered on the Bungie app (see README). Bungie permits no scope param.
-    redirect_uri: browser.identity.getRedirectURL(),
+    redirect_uri: redirectUrl,
   });
   const redirect = await browser.identity.launchWebAuthFlow({ url: `${AUTHORIZE_URL}?${params}`, interactive: true });
   if (!redirect) throw new BungieError('unknown', 'Bungie login failed: the auth window closed without a redirect.');
-  const result = new URL(redirect).searchParams;
-  if (result.get('state') !== state) throw new BungieError('unknown', 'Bungie login failed: OAuth state mismatch.');
+  const callback = new URL(redirect);
+  const expected = new URL(redirectUrl);
+  if (callback.origin !== expected.origin || callback.pathname !== expected.pathname || callback.username || callback.password || callback.hash) {
+    throw new BungieError('unknown', 'Bungie login failed: unexpected OAuth redirect.');
+  }
+  const result = callback.searchParams;
+  if (result.getAll('state').length !== 1 || result.get('state') !== state) {
+    throw new BungieError('unknown', 'Bungie login failed: OAuth state mismatch.');
+  }
   const code = result.get('code');
-  if (!code) throw new BungieError('unknown', 'Bungie login failed: no authorization code returned.');
-  const tokens = { ...await requestTokens({ grant_type: 'authorization_code', code }), sessionId: state };
+  if (!code || result.getAll('code').length !== 1 || result.has('error')) {
+    throw new BungieError('unknown', 'Bungie login failed: no valid authorization code returned.');
+  }
+  const tokens = { ...await requestTokens(code, redirectUrl), sessionId: state };
   await navigator.locks.request('bungie-session', async () => {
     const revision = (await browser.storage.session.get(REVISION_KEY))[REVISION_KEY];
     if (revision !== state) throw new BungieError('login-required', 'This login attempt was cancelled by a newer login or logout.');
     await browser.storage.session.remove(['chatHistory', 'profileFetchedThisSession']);
     await browser.storage.local.remove('profileSnapshot');
-    await browser.storage.local.set({ [STORAGE_KEY]: tokens });
+    await browser.storage.session.set({ [STORAGE_KEY]: tokens });
   });
   return tokens;
 }
@@ -86,57 +91,43 @@ export async function logout(expectedSessionId?: string, expectedAccessToken?: s
     if (expectedAccessToken && current?.accessToken !== expectedAccessToken) return;
     await browser.storage.session.set({ [REVISION_KEY]: crypto.randomUUID() });
     await Promise.all([
-      browser.storage.local.remove([STORAGE_KEY, 'profileSnapshot']),
-      browser.storage.session.remove(['chatHistory', 'profileFetchedThisSession']),
+      browser.storage.local.remove(['bungieTokens', 'profileSnapshot']),
+      browser.storage.session.remove([STORAGE_KEY, 'chatHistory', 'profileFetchedThisSession']),
     ]);
   });
 }
 
 /**
- * Access token for Bungie Platform calls, silently refreshed when expired.
- * Throws BungieError('login-required') (and clears stored tokens) when the user must log in again.
+ * Access token for Bungie Platform calls. Public clients receive no refresh
+ * token: expiry clears account data and requires another interactive login.
  */
 export async function getAccessToken(): Promise<string> {
-  // A browser-wide lock protects rotating refresh tokens, even across panels.
-  return navigator.locks.request('bungie-refresh', async () => {
-    const tokens = await getTokens();
-    if (!tokens) throw new BungieError('login-required', 'Not logged in to Bungie.');
-    const now = Date.now();
-    if (now < tokens.accessExpiresAt - EXPIRY_MARGIN_MS) return tokens.accessToken;
-    if (now >= tokens.refreshExpiresAt - EXPIRY_MARGIN_MS) {
-      await logout(tokens.sessionId);
-      throw new BungieError('login-required', 'Your Bungie login has expired. Please log in again.');
-    }
-    try {
-      const updated = {
-        ...await requestTokens({ grant_type: 'refresh_token', refresh_token: tokens.refreshToken }),
-        sessionId: tokens.sessionId,
-      };
-      await withAuthSession(tokens.sessionId, () => browser.storage.local.set({ [STORAGE_KEY]: updated }));
-      return updated.accessToken;
-    } catch (e) {
-      if (e instanceof BungieError && e.kind === 'login-required') await logout(tokens.sessionId);
-      throw e;
-    }
-  });
+  const tokens = await getTokens();
+  if (!tokens) throw new BungieError('login-required', 'Not logged in to Bungie.');
+  if (Date.now() >= tokens.accessExpiresAt - EXPIRY_MARGIN_MS) {
+    await logout(tokens.sessionId, tokens.accessToken);
+    throw new BungieError('login-required', 'Your Bungie login has expired. Please log in again.');
+  }
+  return tokens.accessToken;
 }
 
 function checkCredentials(): void {
-  if (!import.meta.env.WXT_BUNGIE_CLIENT_ID || !import.meta.env.WXT_BUNGIE_CLIENT_SECRET) {
-    throw new BungieError('config', 'Configure the Bungie client id and client secret in the browser env file, then rebuild.');
+  if (!import.meta.env.WXT_BUNGIE_CLIENT_ID || !import.meta.env.WXT_BUNGIE_API_KEY) {
+    throw new BungieError('config', 'Configure the Bungie public client id and API key in the browser env file, then rebuild.');
   }
 }
 
-async function requestTokens(grant: Record<string, string>): Promise<Omit<BungieTokens, 'sessionId'>> {
+async function requestTokens(code: string, redirectUrl: string): Promise<Omit<BungieTokens, 'sessionId'>> {
   checkCredentials();
   const res = await fetch(TOKEN_URL, {
     method: 'POST',
     redirect: 'error',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({
-      ...grant,
+      grant_type: 'authorization_code',
+      code,
       client_id: import.meta.env.WXT_BUNGIE_CLIENT_ID,
-      client_secret: import.meta.env.WXT_BUNGIE_CLIENT_SECRET,
+      redirect_uri: redirectUrl,
     }),
   });
   // Token endpoint errors are OAuth-style {error, error_description}, not the Platform envelope.
@@ -150,8 +141,7 @@ async function requestTokens(grant: Record<string, string>): Promise<Omit<Bungie
     if (reason === 'SystemDisabled') {
       throw new BungieError('maintenance', 'Bungie.net is down for maintenance. Try again later.');
     }
-    // Fatal = the refresh token is dead and only a fresh login recovers. Anything else
-    // (server_error, 5xx, ...) keeps the stored tokens and is retried on the next call.
+    // Invalid authorization codes require another interactive login.
     const fatal =
       res.status === 401 ||
       res.status === 403 ||
@@ -164,17 +154,15 @@ async function requestTokens(grant: Record<string, string>): Promise<Omit<Bungie
   }
   if (
     typeof data.access_token !== 'string' || !data.access_token ||
-    typeof data.refresh_token !== 'string' || !data.refresh_token ||
+    data.token_type !== 'Bearer' ||
     typeof data.membership_id !== 'string' || !data.membership_id ||
     typeof data.expires_in !== 'number' || !Number.isFinite(data.expires_in) || data.expires_in <= 0 ||
-    typeof data.refresh_expires_in !== 'number' || !Number.isFinite(data.refresh_expires_in) || data.refresh_expires_in <= 0
+    !Number.isFinite(Date.now() + data.expires_in * 1000)
   ) throw new BungieError('unknown', 'Bungie returned an invalid token response.');
   const now = Date.now();
   return {
     accessToken: data.access_token,
-    refreshToken: data.refresh_token,
     accessExpiresAt: now + data.expires_in * 1000,
-    refreshExpiresAt: now + data.refresh_expires_in * 1000,
     membershipId: data.membership_id,
   };
 }

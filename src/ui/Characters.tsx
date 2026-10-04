@@ -39,7 +39,7 @@ export function Characters() {
     void refresh(false);
     const onChanged = (changes: Record<string, Browser.storage.StorageChange>, area: string) => {
       const change = changes.bungieTokens;
-      if (area !== 'local' || !change) return;
+      if (area !== 'session' || !change) return;
       const previous = isRecord(change.oldValue) ? change.oldValue.sessionId : undefined;
       const next = isRecord(change.newValue) ? change.newValue.sessionId : undefined;
       if (previous === next) return;

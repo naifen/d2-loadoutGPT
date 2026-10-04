@@ -39,6 +39,10 @@ export async function executeAgentTool(
   if (!tool) {
     return errorResult(`Unknown tool "${name}". Available: ${AGENT_TOOLS.map((t) => t.schema.function.name).join(', ')}.`);
   }
+  // Bound model-controlled JSON before parsing or passing it to local tools.
+  if (argsJson.length > 65_536) {
+    return errorResult(`Arguments for ${name} exceed the 65536-character limit.`);
+  }
   let args: Record<string, unknown>;
   try {
     const parsed: unknown = argsJson ? JSON.parse(argsJson) : {};

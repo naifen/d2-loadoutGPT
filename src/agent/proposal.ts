@@ -325,6 +325,8 @@ export const proposeLoadout: AgentTool = {
     if (args.mods !== undefined) {
       if (!Array.isArray(args.mods)) {
         problems.push('mods must be an array of armor mod item hashes.');
+      } else if (args.mods.length > modSockets.length) {
+        problems.push('mods cannot all be placed in unlocked sockets on the selected armor within its energy capacity.');
       } else {
         for (const raw of args.mods) {
           const h = raw;
@@ -350,9 +352,13 @@ export const proposeLoadout: AgentTool = {
     const usedSockets = new Set<number>();
     const energyUsed = new Map<string, number>();
     const failedAssignments = new Set<string>();
+    // Model-selected mods can force exponential backtracking; bound work on the UI thread.
+    let assignmentSteps = 0;
+    const maxAssignmentSteps = 10_000;
     const costs = await Promise.all(modHashes.map(async (hash) =>
       (await ctx.manifest.getItem(hash))?.plug?.energyCost?.energyCost ?? 0));
     const fitMods = (index: number): boolean => {
+      if (++assignmentSteps > maxAssignmentSteps) return false;
       if (index === modHashes.length) return true;
       const key = JSON.stringify([index, [...usedSockets].sort((a, b) => a - b),
         [...energyUsed].filter(([, value]) => value !== 0).sort(([a], [b]) => a.localeCompare(b))]);
@@ -369,13 +375,16 @@ export const proposeLoadout: AgentTool = {
         if (fitMods(index + 1)) return true;
         usedSockets.delete(socketIndex);
         energyUsed.set(socket.itemId, used);
+        if (assignmentSteps > maxAssignmentSteps) return false;
       }
       failedAssignments.add(key);
       return false;
     };
     if (modHashes.length > modSockets.length ||
         modHashes.some((hash) => !modSockets.some((socket) => socket.options.has(hash))) || !fitMods(0)) {
-      problems.push('mods cannot all be placed in unlocked sockets on the selected armor within its energy capacity.');
+      problems.push(assignmentSteps > maxAssignmentSteps
+        ? 'mods assignment is too complex to validate safely; request fewer mods.'
+        : 'mods cannot all be placed in unlocked sockets on the selected armor within its energy capacity.');
     }
 
     const notes = str(args.notes)?.trim();

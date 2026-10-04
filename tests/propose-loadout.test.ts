@@ -343,3 +343,39 @@ test('mod assignment respects selected armor energy capacity', async () => {
   const result = await run([proposeCall('p', VALID_ARGS), { content: 'over budget' }], { snapshot, manifest });
   expect(toolResults(result)[0].problems.join('\n')).toContain('energy capacity');
 });
+
+test('adversarial mod combinations stop at a bounded assignment search without a DIM link', async () => {
+  const snapshot = createFixtureSnapshot();
+  for (const id of ['a1', 'a2']) {
+    snapshot.itemComponents!.instances!.data[id]!.energy = {
+      energyTypeHash: 0, energyType: 0, energyCapacity: 9, energyUsed: 0, energyUnused: 9,
+    };
+    snapshot.itemComponents!.reusablePlugs!.data[id] = {
+      plugs: Object.fromEntries(Array.from({ length: 10 }, (_, index) => [
+        String(index), [{ plugItemHash: HASH.modBomber, enabled: true, canInsert: true }],
+      ])),
+    };
+  }
+  const base = createFixtureManifest();
+  const manifest: Manifest = {
+    ...base,
+    getItem: async (hash) => {
+      const def = await base.getItem(hash);
+      if (!def) return def;
+      if (hash === HASH.modBomber) {
+        return { ...def, plug: { ...def.plug, energyCost: { energyCost: 1 } } };
+      }
+      if (hash === HASH.aionHelmet || hash === HASH.aionGauntlets) {
+        return { ...def, sockets: { ...def.sockets, socketEntries: Array.from({ length: 10 }, () => ({ socketTypeHash: 0 })) } };
+      }
+      return def;
+    },
+  };
+  const result = await run([
+    proposeCall('p', { ...VALID_ARGS, mods: Array.from({ length: 19 }, () => HASH.modBomber) }),
+    { content: 'reduce mods' },
+  ], { snapshot, manifest });
+  expect(result.status).toBe('answer');
+  expect(toolResults(result)[0].problems.join('\n')).toContain('too complex');
+  expect(toolResults(result)[0]).not.toHaveProperty('url');
+});
